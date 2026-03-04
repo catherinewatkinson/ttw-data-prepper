@@ -1,0 +1,117 @@
+==================================================
+Electoral Register Conversion QA Report
+==================================================
+Date: 2026-03-04 22:09:51
+Input file: tools/test_data/enriched_council_input.csv
+Output file: tools/test_data/enriched_council_expected.csv
+Mode: register+elections
+Suffix mode: normalize
+
+--- Summary ---
+Total input rows: 20
+Rows deleted (no address): 1
+Rows in output: 19
+Fixes applied: 18
+Warnings: 6
+
+--- Encoding ---
+Input encoding detected: utf-8-sig
+Output encoding: UTF-8-BOM
+
+--- Column Mapping ---
+Input columns: PDCode, RollNo, Suffix, DateOfAttainment, GE24, New, P/PB, DNK, 1st round, ElectorSurname, ElectorForename, Full Name, RegisteredAddress1, RegisteredAddress2, RegisteredAddress3, RegisteredAddress4, RegisteredAddress5, RegisteredAddress6, PostCode, Euro, Parl, Ward, SubHouse, House, MethodOfVerification, ElectorID, UPRN, Party, 1-5, Comments, Email Address, Phone number, Issues, Identifier, Address Identifier
+
+  Output Field                     <- Source
+  -----------------------------    ------
+  Elector No. Prefix               <- PDCode
+  Elector No.                      <- RollNo
+  Elector No. Suffix               <- Input: Suffix column (fractional values renumbered sequentially)
+  Full Elector No.                 <- Computed: {Elector No. Prefix}-{Elector No.}-{Elector No. Suffix}
+  Surname                          <- ElectorSurname (+ name case normalization)
+  Forename                         <- ElectorForename (+ name case normalization)
+  Middle Names                     <- ElectorMiddleName
+  Date of Attainment               <- DateOfAttainment (+ date normalization to DD/MM/YYYY)
+  Address1                         <- RegisteredAddress1 (+ SubHouse incorporation, address reformatting)
+  Address2                         <- RegisteredAddress2 (+ address reformatting)
+  Address3                         <- RegisteredAddress3
+  Address4                         <- RegisteredAddress4
+  Address5                         <- RegisteredAddress5
+  Address6                         <- RegisteredAddress6
+  PostCode                         <- PostCode (+ spacing/case normalization)
+  UPRN                             <- UPRN
+  GE2024 Voted                     <- GE2024 Voted
+  LE2026 Green Voting Intention    <- LE2026 Green Voting Intention
+  LE2026 Party                     <- LE2026 Party
+  LE2026 Postal Voter              <- LE2026 Postal Voter
+  Email Address                    <- Email Address
+  Phone number                     <- Phone number
+  Comments                         <- Comments
+  Issues                           <- Issues
+  P/PB                             <- P/PB
+  DNK                              <- DNK
+  New                              <- New
+  1st round                        <- 1st round
+  Identifier                       <- Identifier
+  Address Identifier               <- Address Identifier
+
+Output columns: Elector No. Prefix, Elector No., Elector No. Suffix, Full Elector No., Surname, Forename, Middle Names, Date of Attainment, Address1, Address2, Address3, Address4, Address5, Address6, PostCode, UPRN, GE2024 Voted, LE2026 Green Voting Intention, LE2026 Party, LE2026 Postal Voter, Email Address, Phone number, Comments, Issues, P/PB, DNK, New, 1st round, Identifier, Address Identifier
+Discarded columns: Euro, Parl, Ward, MethodOfVerification, ElectorID, Full Name
+
+--- Deleted Records ---
+  HP2-35 (Ghost NoAddress): no address
+
+--- Fixes Applied ---
+  Row 12: Forename 'DAVID' -> 'David' -- name case normalized
+  Row 12: Surname 'JOHNSON' -> 'Johnson' -- name case normalized
+  Row 13: Forename 'MARY' -> 'Mary' -- name case normalized
+  Row 13: Surname 'JOHNSON' -> 'Johnson' -- name case normalized
+  Row 14: Forename 'PETER' -> 'Peter' -- name case normalized
+  Row 14: Surname 'JOHNSON' -> 'Johnson' -- name case normalized
+  Row 4: Address1 '10 Ontario Point' -> 'Ontario Point 10' -- number before building name reordered
+  Row 5: Address1 '10 Ontario Point' -> 'Ontario Point 10' -- number before building name reordered
+  Row 4: Elector No. Suffix '.5' -> '' -- suffix normalized (fractional -> sequential)
+  Row 5: Elector No. Suffix '.75' -> '1' -- suffix normalized (fractional -> sequential)
+  Row 7: Elector No. Suffix '.5' -> '' -- suffix normalized (fractional -> sequential)
+  Row 9: Elector No. Suffix '.75' -> '1' -- suffix normalized (fractional -> sequential)
+  Row 8: Elector No. Suffix '.875' -> '2' -- suffix normalized (fractional -> sequential)
+  Row 12: Elector No. Suffix '.5' -> '' -- suffix normalized (fractional -> sequential)
+  Row 13: Elector No. Suffix '.75' -> '1' -- suffix normalized (fractional -> sequential)
+  Row 14: Elector No. Suffix '.875' -> '2' -- suffix normalized (fractional -> sequential)
+  Row 18: Elector No. Suffix '.5' -> '' -- suffix normalized (fractional -> sequential)
+  Row 19: Elector No. Suffix '.75' -> '1' -- suffix normalized (fractional -> sequential)
+
+--- Warnings ---
+  Row 20: LE2026 Party = 'SomeParty' -- Unrecognized party value 'SomeParty', kept as-is
+  Row 20: LE2026 Green Voting Intention = '6' -- Invalid voting intention '6' (must be 1-5 or blank), cleared
+  Row 4: Elector No. = 'KG1-3' -- Duplicate: appears 2 times (rows [4, 5])
+  Row 7: Elector No. = 'KG2-10' -- Duplicate: appears 3 times (rows [7, 8, 9])
+  Row 12: Elector No. = 'HP1-22' -- Duplicate: appears 3 times (rows [12, 13, 14])
+  Row 18: Elector No. = 'HP2-33' -- Duplicate: appears 2 times (rows [18, 19])
+
+### MACHINE-READABLE SECTION ###
+DELETED|PDCode=HP2|RollNo=35|Reason=no address
+FIX|Row=12|Field=Forename|Old=DAVID|New=David|Issue=name case normalized
+FIX|Row=12|Field=Surname|Old=JOHNSON|New=Johnson|Issue=name case normalized
+FIX|Row=13|Field=Forename|Old=MARY|New=Mary|Issue=name case normalized
+FIX|Row=13|Field=Surname|Old=JOHNSON|New=Johnson|Issue=name case normalized
+FIX|Row=14|Field=Forename|Old=PETER|New=Peter|Issue=name case normalized
+FIX|Row=14|Field=Surname|Old=JOHNSON|New=Johnson|Issue=name case normalized
+FIX|Row=4|Field=Address1|Old=10 Ontario Point|New=Ontario Point 10|Issue=number before building name reordered
+FIX|Row=5|Field=Address1|Old=10 Ontario Point|New=Ontario Point 10|Issue=number before building name reordered
+FIX|Row=4|Field=Elector No. Suffix|Old=.5|New=|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=5|Field=Elector No. Suffix|Old=.75|New=1|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=7|Field=Elector No. Suffix|Old=.5|New=|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=9|Field=Elector No. Suffix|Old=.75|New=1|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=8|Field=Elector No. Suffix|Old=.875|New=2|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=12|Field=Elector No. Suffix|Old=.5|New=|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=13|Field=Elector No. Suffix|Old=.75|New=1|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=14|Field=Elector No. Suffix|Old=.875|New=2|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=18|Field=Elector No. Suffix|Old=.5|New=|Issue=suffix normalized (fractional -> sequential)
+FIX|Row=19|Field=Elector No. Suffix|Old=.75|New=1|Issue=suffix normalized (fractional -> sequential)
+WARNING|Row=20|Field=LE2026 Party|Value=SomeParty|Issue=Unrecognized party value 'SomeParty', kept as-is
+WARNING|Row=20|Field=LE2026 Green Voting Intention|Value=6|Issue=Invalid voting intention '6' (must be 1-5 or blank), cleared
+WARNING|Row=4|Field=Elector No.|Value=KG1-3|Issue=Duplicate: appears 2 times (rows [4, 5])
+WARNING|Row=7|Field=Elector No.|Value=KG2-10|Issue=Duplicate: appears 3 times (rows [7, 8, 9])
+WARNING|Row=12|Field=Elector No.|Value=HP1-22|Issue=Duplicate: appears 3 times (rows [12, 13, 14])
+WARNING|Row=18|Field=Elector No.|Value=HP2-33|Issue=Duplicate: appears 2 times (rows [18, 19])
+### END MACHINE-READABLE SECTION ###

@@ -13,15 +13,39 @@ Examples:
         --mode register+elections \\
         --elections 2022 2026 \\
         --election-types historic future
+
+    # Combined council+enrichment data (single file with GE24/Party/1-5 columns)
+    # GE24 is historic (-> Voted), Party/1-5 are current (-> future election)
+    python3 tools/clean_register.py combined.csv output.csv \\
+        --mode register+elections \\
+        --elections GE2024 LE2026 \\
+        --election-types historic future \\
+        --enriched-columns \\
+        --suffix-mode normalize
+
+    # Upload-ready (strip extra columns like Email, Phone, DNK, etc.)
+    python3 tools/clean_register.py combined.csv upload.csv \\
+        --mode register+elections \\
+        --elections GE2024 LE2026 \\
+        --election-types historic future \\
+        --enriched-columns \\
+        --suffix-mode normalize \\
+        --strip-extra
 """
 
 import argparse
 import csv
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
+
+# Import shared utilities
+sys.path.insert(0, str(Path(__file__).parent))
+from ttw_common import (read_input, write_output, normalize_postcode,
+                        UK_POSTCODE_RE, VALID_PARTY_CODES,
+                        PARTY_NAME_MAP, PARTY_BLANK_VALUES, map_party_name)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -80,18 +104,25 @@ COUNCIL_ONLY_COLUMNS = [
 # Columns with potential address data (logged with extra detail)
 SPECIAL_COLUMNS = ["SubHouse", "House"]
 
+# Enrichment columns discarded (logged when --enriched-columns)
+ENRICHMENT_DISCARD_COLUMNS = ["Full Name"]
+
+# Enrichment extra columns preserved in output (unless --strip-extra)
+ENRICHMENT_EXTRA_COLUMNS = [
+    "Email Address", "Phone number", "Comments", "Issues",
+    "P/PB", "DNK", "New", "1st round",
+    "Identifier", "Address Identifier",
+]
+
+# Enrichment source columns (mapped to TTW election columns)
+ENRICHMENT_SOURCE_COLUMNS = ["GE24", "Party", "1-5"]
+
 # TTW headers that indicate a file-swap
 TTW_INDICATOR_HEADERS = {"Elector No. Prefix", "Full Elector No.", "Elector No. Suffix"}
 
 # Date formats to try (ordered by priority)
 KNOWN_DATE_FORMATS_DMY = ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y"]
 KNOWN_DATE_FORMATS_MDY = ["%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"]
-
-# UK postcode regex (loose)
-UK_POSTCODE_RE = re.compile(r"^[A-Z]{1,2}[0-9][0-9A-Z]?\s[0-9][A-Z]{2}$")
-
-# Valid party codes (includes 'L' as alternate Labour abbreviation per TTW test data)
-VALID_PARTY_CODES = {"G", "Con", "Lab", "L", "LD", "REF", "PC", "RA", "Ind", "Oth"}
 
 # Road suffixes for address heuristics (lowercase for comparison)
 ROAD_SUFFIXES = {"road", "rd", "street", "st", "lane", "ln", "avenue", "ave",
@@ -180,6 +211,7 @@ class QAReport:
             "zero": "Generated: always '0'",
             "per-address": "Generated: sequential per unique address",
             "from-column": "Input: Suffix column",
+            "normalize": "Input: Suffix column (fractional values renumbered sequentially)",
         }
 
         col_width = max(
@@ -264,26 +296,8 @@ class QAReport:
 
 
 # ---------------------------------------------------------------------------
-# Input reading
+# Input validation
 # ---------------------------------------------------------------------------
-
-def read_input(input_path):
-    """Read council CSV, auto-detecting encoding. Returns (rows, encoding, headers)."""
-    path = Path(input_path)
-
-    for enc in ["utf-8-sig", "latin-1"]:
-        try:
-            with open(path, "r", encoding=enc, newline="") as f:
-                reader = csv.DictReader(f)
-                headers = list(reader.fieldnames or [])
-                rows = list(reader)
-            return rows, enc, headers
-        except (UnicodeDecodeError, UnicodeError):
-            continue
-
-    print(f"ERROR: Cannot decode {input_path} as UTF-8 or Latin-1.", file=sys.stderr)
-    sys.exit(1)
-
 
 def validate_input(headers, rows, report, max_rows):
     """Validate input headers and row count. Returns True if OK."""
@@ -336,7 +350,7 @@ def map_row(council_row):
 # Suffix computation
 # ---------------------------------------------------------------------------
 
-def compute_suffixes(rows, mode, council_rows=None):
+def compute_suffixes(rows, mode, council_rows=None, report=None):
     """Compute Elector No. Suffix for each row based on mode."""
     if mode == "blank":
         for row in rows:
@@ -362,6 +376,13 @@ def compute_suffixes(rows, mode, council_rows=None):
             suffix = council_row.get("Suffix", "").strip()
             row["Elector No. Suffix"] = suffix if suffix else ""
 
+    elif mode == "normalize":
+        if council_rows is None:
+            print("ERROR: --suffix-mode=normalize requires a 'Suffix' column in input.",
+                  file=sys.stderr)
+            sys.exit(1)
+        _normalize_suffixes(rows, council_rows, report)
+
     # Build Full Elector No.
     for row in rows:
         prefix = row.get("Elector No. Prefix", "")
@@ -371,6 +392,67 @@ def compute_suffixes(rows, mode, council_rows=None):
             row["Full Elector No."] = f"{prefix}-{number}-{suffix}"
         else:
             row["Full Elector No."] = f"{prefix}-{number}"
+
+
+def _normalize_suffixes(rows, council_rows, report):
+    """Normalize fractional suffixes (.5, .75, .875) to sequential integers.
+
+    Groups rows by (PDCode, RollNo). Within each group:
+    - Single row: suffix stays blank
+    - Multiple rows: blank/zero first, then ascending by float value,
+      non-parseable suffixes after floats alphabetically.
+      Primary (first) gets blank suffix, rest get 1, 2, 3...
+    """
+    # Group row indices by (prefix, number)
+    groups = defaultdict(list)
+    for i, (row, council_row) in enumerate(zip(rows, council_rows)):
+        prefix = row.get("Elector No. Prefix", "")
+        number = row.get("Elector No.", "")
+        suffix_raw = council_row.get("Suffix", "").strip()
+        groups[(prefix, number)].append((i, suffix_raw))
+
+    for (prefix, number), members in groups.items():
+        if len(members) == 1:
+            # Single row: blank suffix
+            idx, old_suffix = members[0]
+            rows[idx]["Elector No. Suffix"] = ""
+            if old_suffix and report:
+                report.fixes.append((idx + 2, "Elector No. Suffix", old_suffix, "",
+                    "suffix normalized (single row in group)"))
+            continue
+
+        # Multiple rows: sort and renumber
+        # Classify each suffix as float-parseable or not
+        float_members = []
+        non_float_members = []
+        for idx, suffix_raw in members:
+            if not suffix_raw:
+                float_members.append((0.0, idx, suffix_raw))
+            else:
+                try:
+                    val = float(suffix_raw)
+                    float_members.append((val, idx, suffix_raw))
+                except ValueError:
+                    non_float_members.append((suffix_raw, idx, suffix_raw))
+
+        # Sort: floats ascending, then non-floats alphabetically
+        float_members.sort(key=lambda x: x[0])
+        non_float_members.sort(key=lambda x: x[0])
+
+        sorted_members = [(idx, raw) for _, idx, raw in float_members] + \
+                         [(idx, raw) for _, idx, raw in non_float_members]
+
+        # Assign: first gets blank, rest get 1, 2, 3...
+        for pos, (idx, old_suffix) in enumerate(sorted_members):
+            if pos == 0:
+                new_suffix = ""
+            else:
+                new_suffix = str(pos)
+
+            rows[idx]["Elector No. Suffix"] = new_suffix
+            if old_suffix != new_suffix and report:
+                report.fixes.append((idx + 2, "Elector No. Suffix", old_suffix,
+                    new_suffix, "suffix normalized (fractional -> sequential)"))
 
 
 # ---------------------------------------------------------------------------
@@ -398,32 +480,6 @@ def normalize_date(value, date_format_hint="DMY"):
             continue
 
     return "", f"unparseable date, cleared to blank (original: '{value}')"
-
-
-# ---------------------------------------------------------------------------
-# PostCode normalization
-# ---------------------------------------------------------------------------
-
-def normalize_postcode(value):
-    """Strip, uppercase, normalize spacing. Returns (normalized, warning_or_None)."""
-    if not value or not value.strip():
-        return "", None
-
-    pc = " ".join(value.upper().split())  # collapse whitespace, uppercase
-
-    # Insert space before last 3 chars if missing
-    if len(pc) >= 5 and " " not in pc:
-        pc = pc[:-3] + " " + pc[-3:]
-
-    # Normalize to single space before inward code
-    parts = pc.rsplit(" ", 1)
-    if len(parts) == 2:
-        pc = parts[0].strip() + " " + parts[1].strip()
-
-    if not UK_POSTCODE_RE.match(pc):
-        return pc, f"PostCode '{pc}' may not be valid UK format"
-
-    return pc, None
 
 
 # ---------------------------------------------------------------------------
@@ -769,16 +825,46 @@ def map_election_data(row, council_row, elections, election_types, row_num, repo
 
 
 # ---------------------------------------------------------------------------
-# Output writing
+# Enriched election data mapping
 # ---------------------------------------------------------------------------
 
-def write_output(rows, headers, output_path):
-    """Write TTW-format CSV with UTF-8 BOM and CRLF line endings."""
-    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=headers, lineterminator="\r\n",
-                                extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
+def map_enriched_election_data(row, council_row, elections, election_types,
+                               row_num, report):
+    """Map enrichment columns (GE24, Party, 1-5) to TTW election columns.
+
+    GE24 is historic data -> maps to {election} Voted for historic elections.
+    Party and 1-5 are current loyalty -> map to {election} Party and
+    {election} Green Voting Intention for the future election.
+    """
+    for election_name, election_type in zip(elections, election_types):
+        if election_type == "historic":
+            # GE24 -> Voted: any non-empty value -> "v"
+            voted_key = f"{election_name} Voted"
+            ge24_val = council_row.get("GE24", "").strip()
+            row[voted_key] = "v" if ge24_val else ""
+
+        elif election_type == "future":
+            gvi_key = f"{election_name} Green Voting Intention"
+            party_key = f"{election_name} Party"
+            postal_key = f"{election_name} Postal Voter"
+
+            # Party -> mapped via party name table
+            party_raw = council_row.get("Party", "").strip()
+            party_mapped, party_warning = map_party_name(party_raw)
+            row[party_key] = party_mapped
+            if party_warning:
+                report.warnings.append((row_num, party_key, party_raw, party_warning))
+
+            # 1-5 -> Green Voting Intention (validate 1-5)
+            gvi_val = council_row.get("1-5", "").strip()
+            if gvi_val and gvi_val not in ("1", "2", "3", "4", "5"):
+                report.warnings.append((row_num, gvi_key, gvi_val,
+                    f"Invalid voting intention '{gvi_val}' (must be 1-5 or blank), cleared"))
+                gvi_val = ""
+            row[gvi_key] = gvi_val
+
+            # No postal voter source in enrichment data
+            row[postal_key] = ""
 
 
 # ---------------------------------------------------------------------------
@@ -786,12 +872,14 @@ def write_output(rows, headers, output_path):
 # ---------------------------------------------------------------------------
 
 def build_output_headers(rows, elections, election_types, has_date_data=False,
-                         strip_empty=False):
+                         strip_empty=False, enriched_columns=False,
+                         strip_extra=False, input_headers=None):
     """Build final output header list.
 
     By default, keeps all columns (including empty ones) to match TTW test data
     format. Date of Attainment is only included if the input data has date values.
     Use strip_empty=True to remove entirely-empty optional columns.
+    When enriched_columns=True, extra columns are appended unless strip_extra=True.
     """
     # Start with full register headers
     headers = list(TTW_REGISTER_HEADERS)
@@ -802,12 +890,25 @@ def build_output_headers(rows, elections, election_types, has_date_data=False,
 
     # Add election columns
     for election_name, election_type in zip(elections, election_types):
-        headers.append(f"{election_name} Green Voting Intention")
-        headers.append(f"{election_name} Party")
-        if election_type == "historic":
+        if enriched_columns and election_type == "historic":
+            # Historic enriched: only Voted (no GVI/Party — those go on future)
             headers.append(f"{election_name} Voted")
-        elif election_type == "future":
-            headers.append(f"{election_name} Postal Voter")
+        else:
+            # Standard layout: GVI + Party + Voted/Postal Voter
+            headers.append(f"{election_name} Green Voting Intention")
+            headers.append(f"{election_name} Party")
+            if election_type == "historic":
+                headers.append(f"{election_name} Voted")
+            elif election_type == "future":
+                headers.append(f"{election_name} Postal Voter")
+
+    # Add extra columns when --enriched-columns is active (unless --strip-extra)
+    if enriched_columns and not strip_extra:
+        # Only include extra columns that exist in the input
+        input_set = set(input_headers or [])
+        for col in ENRICHMENT_EXTRA_COLUMNS:
+            if col in input_set:
+                headers.append(col)
 
     # Optionally remove entirely-empty optional columns
     removed = []
@@ -833,12 +934,14 @@ def main():
                         help="Election names (e.g. 2022 2026)")
     parser.add_argument("--election-types", nargs="*", default=[],
                         help="Election types: 'historic' or 'future' per election")
-    parser.add_argument("--suffix-mode", choices=["blank", "zero", "per-address", "from-column"],
+    parser.add_argument("--suffix-mode",
+                        choices=["blank", "zero", "per-address", "from-column", "normalize"],
                         default="blank",
                         help="How to compute Elector No. Suffix (default: blank). "
                              "blank=empty suffix, Full Elector No.=Prefix-No; "
                              "zero=always '0'; per-address=sequential per address; "
-                             "from-column=read from input Suffix column")
+                             "from-column=read from input Suffix column; "
+                             "normalize=renumber fractional suffixes (.5, .75) sequentially")
     parser.add_argument("--date-format", choices=["DMY", "YMD", "MDY"],
                         default="DMY", help="Input date format hint (default: DMY)")
     parser.add_argument("--report", default=None,
@@ -847,6 +950,12 @@ def main():
                         help="Warn if input exceeds this many rows (default: 100000)")
     parser.add_argument("--strip-empty", action="store_true",
                         help="Remove entirely-empty optional columns from output")
+    parser.add_argument("--enriched-columns", action="store_true",
+                        help="Input has enrichment columns (GE24, Party, 1-5) in "
+                             "non-standard names. Maps them to TTW election columns.")
+    parser.add_argument("--strip-extra", action="store_true",
+                        help="Remove non-TTW extra columns (Email, Phone, DNK, etc.) "
+                             "from output. Only relevant with --enriched-columns.")
     parser.add_argument("--quiet", action="store_true", help="Suppress stdout progress")
     args = parser.parse_args()
 
@@ -861,6 +970,19 @@ def main():
         for et in args.election_types:
             if et not in ("historic", "future"):
                 parser.error(f"Invalid election type '{et}': must be 'historic' or 'future'")
+
+    # Validate enriched-columns constraints
+    if args.enriched_columns:
+        if args.mode != "register+elections":
+            parser.error("--enriched-columns requires --mode register+elections")
+        historic_count = sum(1 for et in args.election_types if et == "historic")
+        future_count = sum(1 for et in args.election_types if et == "future")
+        if historic_count > 1:
+            parser.error("--enriched-columns only supports one historic election "
+                         "(enrichment columns GE24/Party/1-5 are not per-election)")
+        if future_count != 1:
+            parser.error("--enriched-columns requires exactly one future election "
+                         "(Party/1-5 map to a single future election)")
 
     report = QAReport()
     report.input_file = args.input
@@ -883,6 +1005,8 @@ def main():
     # --- Log discarded and special columns ---
     header_set = set(headers)
     report.discarded_columns = [c for c in COUNCIL_ONLY_COLUMNS if c in header_set]
+    if args.enriched_columns:
+        report.discarded_columns += [c for c in ENRICHMENT_DISCARD_COLUMNS if c in header_set]
     for col in SPECIAL_COLUMNS:
         if col in header_set:
             non_empty = [(i + 2, r.get(col) or "") for i, r in enumerate(council_rows)
@@ -913,12 +1037,13 @@ def main():
         reformat_addresses(row, i + 2, report)
 
     # --- Step 7: Compute suffix ---
-    suffix_council = council_rows if args.suffix_mode == "from-column" else None
-    if args.suffix_mode == "from-column" and "Suffix" not in header_set:
-        print("ERROR: --suffix-mode=from-column requires a 'Suffix' column in input.",
+    suffix_needs_column = args.suffix_mode in ("from-column", "normalize")
+    suffix_council = council_rows if suffix_needs_column else None
+    if suffix_needs_column and "Suffix" not in header_set:
+        print(f"ERROR: --suffix-mode={args.suffix_mode} requires a 'Suffix' column in input.",
               file=sys.stderr)
         sys.exit(1)
-    compute_suffixes(mapped_rows, args.suffix_mode, suffix_council)
+    compute_suffixes(mapped_rows, args.suffix_mode, suffix_council, report=report)
 
     # --- Step 8: Normalize dates ---
     has_date_data = False
@@ -942,19 +1067,31 @@ def main():
             report.warnings.append((row_num, "PostCode", pc, warning))
 
     # --- Step 10: Validate and flag ---
-    delete_indices = []
+    delete_indices = set()
     for i, row in enumerate(mapped_rows):
         row_num = i + 2
         action = validate_row(row, row_num, report)
         if action == "delete":
-            delete_indices.append(i)
+            delete_indices.add(i)
 
     # --- Step 11: Map election data ---
     if args.mode == "register+elections":
         for i, (row, council_row) in enumerate(zip(mapped_rows, council_rows)):
             if i not in delete_indices:
-                map_election_data(row, council_row, args.elections,
-                                  args.election_types, i + 2, report)
+                if args.enriched_columns:
+                    map_enriched_election_data(row, council_row, args.elections,
+                                              args.election_types, i + 2, report)
+                else:
+                    map_election_data(row, council_row, args.elections,
+                                      args.election_types, i + 2, report)
+
+    # --- Step 11b: Copy extra columns when --enriched-columns ---
+    if args.enriched_columns:
+        for i, (row, council_row) in enumerate(zip(mapped_rows, council_rows)):
+            if i not in delete_indices:
+                for col in ENRICHMENT_EXTRA_COLUMNS:
+                    val = council_row.get(col) or ""
+                    row[col] = val.strip()
 
     # --- Step 12: Apply deletions ---
     output_rows = [row for i, row in enumerate(mapped_rows) if i not in delete_indices]
@@ -994,6 +1131,9 @@ def main():
         output_rows, elections, election_types,
         has_date_data=has_date_data,
         strip_empty=args.strip_empty,
+        enriched_columns=args.enriched_columns,
+        strip_extra=args.strip_extra,
+        input_headers=headers,
     )
     report.output_columns = output_headers
     report.removed_optional = removed_cols

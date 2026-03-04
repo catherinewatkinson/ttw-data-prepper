@@ -1550,6 +1550,599 @@ class TestRealisticMessyData(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Suffix Normalize Tests
+# ---------------------------------------------------------------------------
+
+class TestSuffixNormalize(unittest.TestCase):
+    """Test --suffix-mode normalize for fractional suffix renumbering."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_output = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        cls.tmp_output.close()
+        cls.tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        cls.tmp_report.close()
+
+        cls.rc, _, cls.stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", cls.tmp_output.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+            report_file=cls.tmp_report.name,
+        )
+        cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
+        cls.report_text, cls.machine = read_report(cls.tmp_report.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.tmp_output.name)
+        os.unlink(cls.tmp_report.name)
+
+    def test_exit_code_zero(self):
+        self.assertEqual(self.rc, 0, f"Failed:\n{self.stderr}")
+
+    def test_fractional_suffixes_renumbered(self):
+        """Fractional suffixes .5, .75, .875 should become blank, 1, 2."""
+        # KG2-10 group: .5, .75, .875 -> blank, 1, 2
+        kg2_10 = [r for r in self.rows if r["Elector No. Prefix"] == "KG2"
+                  and r["Elector No."] == "10"]
+        self.assertEqual(len(kg2_10), 3)
+        suffixes = sorted(r["Elector No. Suffix"] for r in kg2_10)
+        self.assertEqual(suffixes, ["", "1", "2"])
+
+    def test_primary_entry_stays_blank(self):
+        """The smallest fractional suffix becomes primary (blank suffix)."""
+        # KG1-3 group: .5, .75 -> primary is .5 (blank), .75 becomes 1
+        kg1_3 = [r for r in self.rows if r["Elector No. Prefix"] == "KG1"
+                 and r["Elector No."] == "3"]
+        self.assertEqual(len(kg1_3), 2)
+        # Patel Raj had .5 -> should be blank (primary)
+        raj = [r for r in kg1_3 if r["Forename"] == "Raj"]
+        self.assertEqual(len(raj), 1)
+        self.assertEqual(raj[0]["Elector No. Suffix"], "")
+
+    def test_single_row_no_suffix(self):
+        """Solo PDCode+RollNo should have blank suffix."""
+        # KG1-1 (Smith John) is alone
+        smith = [r for r in self.rows if r["Surname"] == "Smith" and r["Forename"] == "John"]
+        self.assertEqual(len(smith), 1)
+        self.assertEqual(smith[0]["Elector No. Suffix"], "")
+
+    def test_full_elector_no_with_normalized_suffix(self):
+        """Full Elector No. format should be correct after normalization."""
+        for r in self.rows:
+            prefix = r["Elector No. Prefix"]
+            number = r["Elector No."]
+            suffix = r["Elector No. Suffix"]
+            if suffix:
+                expected = f"{prefix}-{number}-{suffix}"
+            else:
+                expected = f"{prefix}-{number}"
+            self.assertEqual(r["Full Elector No."], expected,
+                f"FEN mismatch: expected {expected}, got {r['Full Elector No.']}")
+
+    def test_all_fractional_group(self):
+        """When ALL rows have fractional suffixes, smallest becomes primary."""
+        # KG2-10: all have .5, .75, .875 (no blank) -> .5 becomes primary
+        kg2_10 = [r for r in self.rows if r["Elector No. Prefix"] == "KG2"
+                  and r["Elector No."] == "10"]
+        # O'Brien-Murphy had .5 -> should be primary (blank)
+        sean = [r for r in kg2_10 if r["Surname"] == "O'Brien-Murphy"]
+        self.assertEqual(len(sean), 1)
+        self.assertEqual(sean[0]["Elector No. Suffix"], "")
+
+    def test_suffix_renumber_logged(self):
+        """Renumbering should appear as FIX entries in report."""
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        suffix_fixes = [f for _, f in fixes if "suffix normalized" in f.get("Issue", "")]
+        self.assertTrue(len(suffix_fixes) >= 1,
+            "Suffix normalization should produce FIX entries")
+
+    def test_normalize_guarantees_unique_fen(self):
+        """Normalized suffixes should produce unique Full Elector No. values."""
+        fens = [r["Full Elector No."] for r in self.rows]
+        self.assertEqual(len(fens), len(set(fens)),
+            f"Duplicate Full Elector No. values: {[f for f in fens if fens.count(f) > 1]}")
+
+    def test_suffix_normalize_missing_column_errors(self):
+        """Missing Suffix column should produce a clear error."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "edge_cases.csv", tmp_out.name,
+            extra_args=["--suffix-mode", "normalize"],
+        )
+        os.unlink(tmp_out.name)
+        self.assertNotEqual(rc, 0, "Should fail when Suffix column is missing")
+        self.assertIn("Suffix", stderr)
+
+    def test_mixed_suffix_formats(self):
+        """Handles '0.5' and '.5' consistently (both parse as 0.5)."""
+        # Create minimal CSV with both forms
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
+        import csv as _csv
+        writer = _csv.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "Suffix", "ElectorSurname",
+                         "ElectorForename", "RegisteredAddress1", "PostCode"])
+        writer.writerow(["AA1", "1", "0.5", "Alpha", "A", "10 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "1", ".75", "Beta", "B", "10 Road", "NW1 1AA"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name,
+                                  extra_args=["--suffix-mode", "normalize"])
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_in.name)
+        os.unlink(tmp_out.name)
+
+        # 0.5 < 0.75 -> primary (blank) and 1
+        alpha = [r for r in rows if r["Surname"] == "Alpha"]
+        beta = [r for r in rows if r["Surname"] == "Beta"]
+        self.assertEqual(alpha[0]["Elector No. Suffix"], "")
+        self.assertEqual(beta[0]["Elector No. Suffix"], "1")
+
+    def test_non_fractional_suffix_values(self):
+        """Non-numeric suffixes like 'A' handled gracefully (sorted after floats)."""
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
+        import csv as _csv
+        writer = _csv.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "Suffix", "ElectorSurname",
+                         "ElectorForename", "RegisteredAddress1", "PostCode"])
+        writer.writerow(["AA1", "1", ".5", "Float", "A", "10 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "1", "A", "Alpha", "B", "10 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "1", "B", "Bravo", "C", "10 Road", "NW1 1AA"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name,
+                                  extra_args=["--suffix-mode", "normalize"])
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_in.name)
+        os.unlink(tmp_out.name)
+
+        # .5 (float) first -> blank, then A, B (alpha) -> 1, 2
+        float_row = [r for r in rows if r["Surname"] == "Float"]
+        alpha_row = [r for r in rows if r["Surname"] == "Alpha"]
+        bravo_row = [r for r in rows if r["Surname"] == "Bravo"]
+        self.assertEqual(float_row[0]["Elector No. Suffix"], "")
+        self.assertEqual(alpha_row[0]["Elector No. Suffix"], "1")
+        self.assertEqual(bravo_row[0]["Elector No. Suffix"], "2")
+
+
+# ---------------------------------------------------------------------------
+# Enriched Columns Tests
+# ---------------------------------------------------------------------------
+
+class TestEnrichedColumns(unittest.TestCase):
+    """Test --enriched-columns election data mapping from GE24/Party/1-5."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_output = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        cls.tmp_output.close()
+        cls.tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        cls.tmp_report.close()
+
+        cls.rc, _, cls.stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", cls.tmp_output.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+            report_file=cls.tmp_report.name,
+        )
+        cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
+        cls.report_text, cls.machine = read_report(cls.tmp_report.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.tmp_output.name)
+        os.unlink(cls.tmp_report.name)
+
+    def _get_row(self, surname, forename=None):
+        matches = [r for r in self.rows if r["Surname"] == surname]
+        if forename:
+            matches = [r for r in matches if r["Forename"] == forename]
+        self.assertTrue(len(matches) >= 1, f"Row {surname}/{forename} not found")
+        return matches[0]
+
+    def test_ge24_any_nonempty_becomes_voted(self):
+        """GE24='yes' -> Voted='v'."""
+        row = self._get_row("Patel", "Raj")
+        self.assertEqual(row["GE2024 Voted"], "v")
+
+    def test_ge24_blank_no_voted(self):
+        """Blank GE24 -> Voted=''."""
+        row = self._get_row("Smith", "John")
+        self.assertEqual(row["GE2024 Voted"], "")
+
+    def test_party_full_names_mapped(self):
+        """Full party names should be mapped to TTW codes."""
+        cases = [
+            ("Smith", "John", "G"),          # Green
+            ("Jones", "Sarah", "Lab"),        # Labour
+            ("Patel", "Raj", "Con"),          # Conservative
+            ("Williams", "Emma", "LD"),       # Liberal Democrat
+            ("Martinez", "Ana", "REF"),       # Reform
+        ]
+        for surname, forename, expected in cases:
+            row = self._get_row(surname, forename)
+            self.assertEqual(row["LE2026 Party"], expected,
+                f"{surname}: expected party '{expected}', got '{row['LE2026 Party']}'")
+
+    def test_party_other_mapped(self):
+        """'Other party' -> 'Oth'."""
+        row = self._get_row("Garcia-Lopez", "Maria")
+        self.assertEqual(row["LE2026 Party"], "Oth")
+
+    def test_party_non_party_blanked(self):
+        """'Did not vote', 'Won't say' -> blank."""
+        kim = self._get_row("Kim", "Ji-Yeon")
+        self.assertEqual(kim["LE2026 Party"], "")
+        brown = self._get_row("Brown", "Michael")
+        self.assertEqual(brown["LE2026 Party"], "")
+
+    def test_party_ttw_code_passthrough(self):
+        """Already-valid TTW code 'G' should pass through unchanged."""
+        chen = self._get_row("Chen", "Wei")
+        self.assertEqual(chen["LE2026 Party"], "G")
+
+    def test_party_unrecognized_warned(self):
+        """Unrecognized party kept as-is + warning."""
+        taylor = self._get_row("Taylor", "Sophie")
+        self.assertEqual(taylor["LE2026 Party"], "SomeParty")
+        warnings = [parse_machine_line(l) for l in self.machine if l.startswith("WARNING")]
+        party_warns = [w for _, w in warnings if "SomeParty" in w.get("Value", "")]
+        self.assertTrue(len(party_warns) >= 1, "Unrecognized party should generate WARNING")
+
+    def test_party_case_insensitive(self):
+        """Party mapping should be case-insensitive: 'green', 'GREEN', 'Green' all -> 'G'."""
+        # Test via the map_party_name function directly
+        sys.path.insert(0, str(SCRIPT_DIR))
+        from ttw_common import map_party_name
+        for variant in ("green", "GREEN", "Green", "gReEn"):
+            mapped, warning = map_party_name(variant)
+            self.assertEqual(mapped, "G",
+                f"map_party_name({variant!r}) should return 'G', got {mapped!r}")
+            self.assertIsNone(warning)
+
+    def test_1_5_becomes_gvi(self):
+        """'1-5' column values map to Green Voting Intention on future election."""
+        smith = self._get_row("Smith", "John")
+        self.assertEqual(smith["LE2026 Green Voting Intention"], "1")
+        jones = self._get_row("Jones", "Sarah")
+        self.assertEqual(jones["LE2026 Green Voting Intention"], "3")
+
+    def test_1_5_invalid_warned(self):
+        """Value outside 1-5 should generate warning and be cleared."""
+        taylor = self._get_row("Taylor", "Sophie")
+        self.assertEqual(taylor["LE2026 Green Voting Intention"], "")
+        warnings = [parse_machine_line(l) for l in self.machine if l.startswith("WARNING")]
+        gvi_warns = [w for _, w in warnings if "voting intention" in w.get("Issue", "").lower()]
+        self.assertTrue(len(gvi_warns) >= 1)
+
+    def test_postal_voter_empty(self):
+        """Postal voter column on future election should be present but empty."""
+        self.assertIn("LE2026 Postal Voter", self.headers)
+        for row in self.rows:
+            self.assertEqual(row["LE2026 Postal Voter"], "",
+                f"LE2026 Postal Voter should be empty, got {row['LE2026 Postal Voter']!r}")
+
+    def test_historic_election_no_gvi_party_columns(self):
+        """Historic election should NOT have GVI or Party columns in enriched mode."""
+        self.assertNotIn("GE2024 Green Voting Intention", self.headers)
+        self.assertNotIn("GE2024 Party", self.headers)
+        # But Voted should still be there
+        self.assertIn("GE2024 Voted", self.headers)
+
+    def test_multiple_historic_elections_errors(self):
+        """--enriched-columns with 2+ historic elections should error."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024", "GE2019",
+                "--election-types", "historic", "historic",
+                "--enriched-columns",
+            ],
+        )
+        os.unlink(tmp_out.name)
+        self.assertNotEqual(rc, 0, "Should error with 2 historic elections")
+        self.assertIn("one historic election", stderr.lower())
+
+    def test_no_future_election_errors(self):
+        """--enriched-columns with no future election should error."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024",
+                "--election-types", "historic",
+                "--enriched-columns",
+            ],
+        )
+        os.unlink(tmp_out.name)
+        self.assertNotEqual(rc, 0, "Should error with no future election")
+        self.assertIn("future election", stderr.lower())
+
+    def test_multiple_future_elections_errors(self):
+        """--enriched-columns with 2+ future elections should error."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024", "LE2026", "BYE2026",
+                "--election-types", "historic", "future", "future",
+                "--enriched-columns",
+            ],
+        )
+        os.unlink(tmp_out.name)
+        self.assertNotEqual(rc, 0, "Should error with 2 future elections")
+        self.assertIn("future election", stderr.lower())
+
+
+# ---------------------------------------------------------------------------
+# Extra Columns Tests
+# ---------------------------------------------------------------------------
+
+class TestExtraColumns(unittest.TestCase):
+    """Test extra column passthrough and --strip-extra."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_output = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        cls.tmp_output.close()
+
+        cls.rc, _, cls.stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", cls.tmp_output.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+        )
+        cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.tmp_output.name)
+
+    def test_email_phone_in_output(self):
+        """Email Address and Phone number columns should be present."""
+        self.assertIn("Email Address", self.headers)
+        self.assertIn("Phone number", self.headers)
+
+    def test_dnk_ppb_preserved(self):
+        """DNK and P/PB values should be preserved."""
+        self.assertIn("DNK", self.headers)
+        self.assertIn("P/PB", self.headers)
+        jones = [r for r in self.rows if r["Surname"] == "Jones"]
+        self.assertEqual(len(jones), 1)
+        self.assertEqual(jones[0]["DNK"], "Do not knock")
+
+    def test_identifier_columns_preserved(self):
+        """Identifier and Address Identifier should pass through."""
+        self.assertIn("Identifier", self.headers)
+        self.assertIn("Address Identifier", self.headers)
+        smith = [r for r in self.rows if r["Surname"] == "Smith" and r["Forename"] == "John"]
+        self.assertEqual(smith[0]["Identifier"], "ID001")
+        self.assertEqual(smith[0]["Address Identifier"], "ADDR001")
+
+    def test_strip_extra_removes_all_extras(self):
+        """--strip-extra should remove all non-TTW/election columns."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+                "--strip-extra",
+            ],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+
+        extra_cols = {"Email Address", "Phone number", "Comments", "Issues",
+                      "P/PB", "DNK", "New", "1st round",
+                      "Identifier", "Address Identifier"}
+        leaked = extra_cols & set(headers)
+        self.assertEqual(leaked, set(),
+            f"Extra columns should be stripped: {leaked}")
+        # Core + election columns should still be present
+        self.assertIn("Elector No. Prefix", headers)
+        self.assertIn("LE2026 Party", headers)
+
+
+# ---------------------------------------------------------------------------
+# Backwards Compatibility Tests
+# ---------------------------------------------------------------------------
+
+class TestBackwardsCompatibility(unittest.TestCase):
+    """Test that existing functionality is not broken by enrichment changes."""
+
+    def test_plain_council_still_works(self):
+        """Existing council-format input without enrichment columns works as before."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
+            extra_args=["--suffix-mode", "from-column"],
+        )
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        self.assertTrue(len(rows) > 0)
+
+    def test_enriched_columns_flag_ignored_without_data(self):
+        """--enriched-columns on plain council data (with election cols) doesn't crash."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_plus_elections.csv", tmp_out.name,
+            extra_args=[
+                "--suffix-mode", "from-column",
+                "--mode", "register+elections",
+                "--elections", "2022", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+        )
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        self.assertEqual(rc, 0, f"Should not crash:\n{stderr}")
+        self.assertTrue(len(rows) > 0)
+
+    def test_enriched_columns_without_mode_errors(self):
+        """--enriched-columns without --mode register+elections should error."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=["--enriched-columns"],
+        )
+        os.unlink(tmp_out.name)
+        self.assertNotEqual(rc, 0, "Should error without register+elections mode")
+
+    def test_existing_golden_register_only_unchanged(self):
+        """Existing golden file test still passes (register only)."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
+            extra_args=["--suffix-mode", "from-column"],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        exp_h, exp_r = read_output_csv(TEST_DATA / "golden_expected_register_only.csv")
+        got_h, got_r = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        self.assertEqual(exp_h, got_h)
+        self.assertEqual(len(exp_r), len(got_r))
+
+    def test_existing_golden_register_plus_elections_unchanged(self):
+        """Existing golden file test still passes (register+elections)."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_plus_elections.csv", tmp_out.name,
+            extra_args=[
+                "--suffix-mode", "from-column",
+                "--mode", "register+elections",
+                "--elections", "2022", "2026",
+                "--election-types", "historic", "future",
+            ],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        exp_h, exp_r = read_output_csv(TEST_DATA / "golden_expected_register_plus_elections.csv")
+        got_h, got_r = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        self.assertEqual(exp_h, got_h)
+        self.assertEqual(len(exp_r), len(got_r))
+
+    def test_enrich_register_tests_still_pass(self):
+        """Verify test_enrichment.py passes after import refactor."""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_DIR / "test_enrichment.py")],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0,
+            f"test_enrichment.py failed:\n{result.stderr}")
+
+
+# ---------------------------------------------------------------------------
+# Enriched Golden File Test
+# ---------------------------------------------------------------------------
+
+class TestEnrichedGoldenFile(unittest.TestCase):
+    """Test full pipeline with enriched input against golden expected output."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.golden_input = TEST_DATA / "enriched_council_input.csv"
+        cls.golden_expected = TEST_DATA / "enriched_council_expected.csv"
+        cls.tmp_output = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        cls.tmp_output.close()
+        cls.tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        cls.tmp_report.close()
+
+        cls.rc, cls.stdout, cls.stderr = run_clean(
+            cls.golden_input, cls.tmp_output.name,
+            extra_args=[
+                "--suffix-mode", "normalize",
+                "--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+            report_file=cls.tmp_report.name,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.tmp_output.name)
+        os.unlink(cls.tmp_report.name)
+
+    def test_exit_code_zero(self):
+        self.assertEqual(self.rc, 0, f"clean_register.py failed:\n{self.stderr}")
+
+    def test_header_match(self):
+        exp_h, _ = read_output_csv(self.golden_expected)
+        got_h, _ = read_output_csv(self.tmp_output.name)
+        self.assertEqual(exp_h, got_h,
+            f"Column order mismatch.\nExpected: {exp_h}\nGot:      {got_h}")
+
+    def test_row_count(self):
+        _, exp_r = read_output_csv(self.golden_expected)
+        _, got_r = read_output_csv(self.tmp_output.name)
+        self.assertEqual(len(exp_r), len(got_r))
+
+    def test_field_level_match(self):
+        exp_h, exp_r = read_output_csv(self.golden_expected)
+        _, got_r = read_output_csv(self.tmp_output.name)
+        for i, (exp, got) in enumerate(zip(exp_r, got_r)):
+            for col in exp_h:
+                self.assertEqual(
+                    exp.get(col, ""), got.get(col, ""),
+                    f"Row {i+1}, column '{col}': expected {repr(exp.get(col, ''))}, "
+                    f"got {repr(got.get(col, ''))}"
+                )
+
+    def test_one_deletion(self):
+        """NoAddress row should be deleted."""
+        _, machine = read_report(self.tmp_report.name)
+        deletions = [l for l in machine if l.startswith("DELETED")]
+        self.assertEqual(len(deletions), 1)
+        _, fields = parse_machine_line(deletions[0])
+        self.assertEqual(fields["Reason"], "no address")
+
+
+# ---------------------------------------------------------------------------
 # User Verification Mode
 # ---------------------------------------------------------------------------
 

@@ -1,0 +1,21 @@
+PDCode,RollNo,Suffix,DateOfAttainment,GE24,New,P/PB,DNK,1st round,ElectorSurname,ElectorForename,Full Name,RegisteredAddress1,RegisteredAddress2,RegisteredAddress3,RegisteredAddress4,RegisteredAddress5,RegisteredAddress6,PostCode,Euro,Parl,Ward,SubHouse,House,MethodOfVerification,ElectorID,UPRN,Party,1-5,Comments,Email Address,Phone number,Issues,Identifier,Address Identifier
+KG1,1,,,,,,,,Smith,John,John Smith,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,Kensal Green,,,D,E1,,Green,1,,john@example.com,07700900001,,ID001,ADDR001
+KG1,2,,,,,,Do not knock,,Jones,Sarah,Sarah Jones,44 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,Kensal Green,,,D,E2,,Labour,3,,sarah@example.com,07700900002,None,ID002,ADDR002
+KG1,3,.5,,yes,,,,busy,Patel,Raj,Raj Patel,10 Ontario Point,Kilburn Lane,,,,,NW10 4AA,London,Brent North,Kensal Green,,,D,E3,10070834521,Conservative,2,,,,Housing,ID003,ADDR003
+KG1,3,.75,,yes,,,,Yes spoken to,Patel,Priya,Priya Patel,10 Ontario Point,Kilburn Lane,,,,,NW10 4AA,London,Brent North,Kensal Green,,,D,E4,10070834521,Conservative,2,,priya@example.com,07700900004,,ID004,ADDR003
+KG1,4,,,,,,,,Williams,Emma,Emma Williams,Flat 5,88 Kilburn Lane,,,,,NW6 7AA,London,Brent North,Kensal Green,,,D,E5,,Liberal Democrat,4,,emma@example.com,,,ID005,ADDR005
+KG2,10,.5,,yes,,,,No,O'Brien-Murphy,Sean,Sean O'Brien-Murphy,South House,21 Chamberlayne Road,,,,,NW10 3JU,London,Brent North,Kensal Green,,,D,E6,,Green,1,,sean@example.com,07700900006,,ID006,ADDR006
+KG2,10,.875,,,,,,Not interested,Martinez,Ana,Ana Martinez,South House,21 Chamberlayne Road,,,,,NW10 3JU,London,Brent North,Kensal Green,,,D,E7,,Reform,5,,,,Transport,ID007,ADDR006
+KG2,10,.75,,yes,,,,Yes but not spoken to,Kim,Ji-Yeon,Ji-Yeon Kim,South House,21 Chamberlayne Road,,,,,NW10 3JU,London,Brent North,Kensal Green,,,D,E8,,Did not vote,,,,,,ID008,ADDR006
+HP1,20,,,,,,,,Brown,Michael,Michael Brown,15 High Road,,,,,,NW10 4UJ,London,Brent North,Kensal Green,,,D,E9,,Won't say,,,michael@example.com,07700900009,,ID009,ADDR009
+HP1,21,,15/03/2008,yes,,,,,Garcia-Lopez,Maria,Maria Garcia-Lopez,22 High Road,,,,,,NW10 4UJ,London,Brent North,Kensal Green,,,D,E10,,Other party,,Free parking,maria@example.com,07700900010,Potholes,ID010,ADDR010
+HP1,22,.5,,yes,,,,busy,JOHNSON,DAVID,DAVID JOHNSON,30 High Road,,,,,,NW10 4UJ,London,Brent North,Kensal Green,,,D,E11,,Green,1,,,,Air quality,ID011,ADDR011
+HP1,22,.75,,,,,,,JOHNSON,MARY,MARY JOHNSON,30 High Road,,,,,,NW10 4UJ,London,Brent North,Kensal Green,,,D,E12,,,,,,,,ID012,ADDR011
+HP1,22,.875,,yes,,,,Yes spoken to,JOHNSON,PETER,PETER JOHNSON,30 High Road,,,,,,NW10 4UJ,London,Brent North,Kensal Green,,,D,E13,,Labour,3,,peter.j@example.com,07700900013,,ID013,ADDR011
+HP2,30,,,,,,Do not knock,,Lee,Grace,Grace Lee,8 Park Avenue,,,,,,NW10 5BB,London,Brent North,Kensal Green,,,D,E14,,,,,,,,ID014,ADDR014
+HP2,31,,,,,,,,Chen,Wei,Wei Chen,12 Park Avenue,,,,,,NW10 5BB,London,Brent North,Kensal Green,,,D,E15,,G,,,,,,ID015,ADDR015
+HP2,32,,2008-03-15,yes,,,,,MacDONALD,Ewan,Ewan MacDONALD,14 Park Avenue,,,,,,NW10 5BB,London,Brent North,Kensal Green,,,D,E16,,Green,1,,ewan@example.com,07700900016,,ID016,ADDR016
+HP2,33,.5,,yes,,,,,De Vries,Anna,Anna De Vries,20 Park Avenue,,,,,,NW10 5BB,London,Brent North,Kensal Green,,,D,E17,,Labour,3,Nice person,,07700900017,,ID017,ADDR017
+HP2,33,.75,,,,,,,De Vries,Pieter,Pieter De Vries,20 Park Avenue,,,,,,NW10 5BB,London,Brent North,Kensal Green,,,D,E18,,,,,,,,ID018,ADDR017
+HP2,34,,,,yes,,,,Taylor,Sophie,Sophie Taylor,25 Park Avenue,,,,,,NW10 5BB,London,Brent North,Kensal Green,,,D,E19,,SomeParty,6,,,07700900019,,ID019,ADDR019
+HP2,35,,,,,,,,NoAddress,Ghost,Ghost NoAddress,,,,,,,,,Brent North,Kensal Green,,,D,E20,,,,,,,,ID020,

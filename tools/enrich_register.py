@@ -19,40 +19,15 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-# Import from sibling module
+# Import from shared utilities module
 sys.path.insert(0, str(Path(__file__).parent))
-from clean_register import (read_input, write_output, normalize_postcode,
-                            UK_POSTCODE_RE, VALID_PARTY_CODES)
+from ttw_common import (read_input, write_output, normalize_postcode,
+                        UK_POSTCODE_RE, VALID_PARTY_CODES,
+                        map_party_name as _map_party_name_common)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-# Party name -> TTW code mapping (case-insensitive, underscores -> spaces)
-PARTY_NAME_MAP = {
-    "green party": "G",
-    "green": "G",
-    "greens": "G",
-    "labour": "Lab",
-    "conservatives": "Con",
-    "conservative": "Con",
-    "tory": "Con",
-    "tories": "Con",
-    "liberal democrats": "LD",
-    "liberal democrat": "LD",
-    "lib dem": "LD",
-    "lib dems": "LD",
-    "reform": "REF",
-    "reform uk": "REF",
-    "reform party": "REF",
-    "independent": "Ind",
-}
-
-# Values that map to blank (not a party)
-PARTY_BLANK_VALUES = {
-    "did not vote", "none", "refused to say", "won't say",
-    "dont know", "don't know", "no answer",
-}
 
 # GVI derivation from party code
 PARTY_TO_GVI = {"G": "1", "Con": "2", "Lab": "3", "LD": "4"}
@@ -249,27 +224,15 @@ class EnrichQAReport:
 # ---------------------------------------------------------------------------
 
 def map_party_name(value, report, source="unknown"):
-    """Map a party name to TTW code. Returns mapped value."""
-    if not value or not value.strip():
-        return ""
+    """Map a party name to TTW code. Returns mapped value.
 
-    raw = value.strip()
-
-    # Already a valid TTW code? Passthrough.
-    if raw in VALID_PARTY_CODES:
-        return raw
-
-    normalized = raw.replace("_", " ").lower().strip()
-
-    if normalized in PARTY_BLANK_VALUES:
-        return ""
-
-    if normalized in PARTY_NAME_MAP:
-        return PARTY_NAME_MAP[normalized]
-
-    # Unrecognized — keep as-is, warn
-    report.unrecognized_parties.append((source, raw))
-    return raw
+    Wraps the common map_party_name() and routes warnings to the enrichment report.
+    """
+    mapped, warning = _map_party_name_common(value)
+    if warning:
+        raw = value.strip() if value else ""
+        report.unrecognized_parties.append((source, raw))
+    return mapped
 
 
 # ---------------------------------------------------------------------------
