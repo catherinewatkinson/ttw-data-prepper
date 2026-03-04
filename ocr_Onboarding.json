@@ -1,0 +1,605 @@
+{
+  "pages": [
+    {
+      "index": 0,
+      "markdown": "# Onboarding to TTW Digital - Guide for Local Parties\n\n11-Feb-2026\n\n- Colin Boyle (Director)\n- Paul Urwin (Technical and Security Lead)\n- Paul Chandler (User Support Lead)\n- TTW Digital Limited\n\n\u00a9TTW Digital Limited 2025\n\n1\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 1,
+      "markdown": "# Welcome!\n\nThanks for considering using the TTW Digital canvassing system\n\nThis guide is for local parties that are looking to get started, and takes you through the process to\n- Prepare and run your first canvass session\n- Roll out across your local party\n\nNote that this is not itself a User Guide\nLinks out to the User Guides will be added were relevant and as they are developed\n\nTo see more, watch our [Walkthrough Video](Walkthrough Video)\n\n![img-0.jpeg](img-0.jpeg)\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [
+        {
+          "id": "img-0.jpeg",
+          "top_left_x": 1288,
+          "top_left_y": 232,
+          "bottom_right_x": 1997,
+          "bottom_right_y": 1312,
+          "image_base64": null,
+          "image_annotation": null
+        }
+      ],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1Z05EBGJplyIsKmaJVJp_IonHJKLpaRN2/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 2,
+      "markdown": "# Background to TTW Digital Limited\n\nIn early 2022, a group of volunteers drawn from over twenty Local Parties came together to work with the national party to deliver secure, scalable, compliant canvassing tools.\n\nFollowing hundreds of hours of volunteer time, the canvassing software was as complete as the volunteer team could get it without further input from the national party - this included a successful pilot (in a by-election in Camden) in summer 2023.\n\nAt this point, the national party requested the work be paused.\n\nThis pause was periodically reconfirmed by the national party through to the beginning of this summer, at which point the volunteer team was also informed by the national party that it would not be able to make its own canvassing software available for the May 2026 election campaigns.\n\nOn that basis, a sub-group of the original volunteer team set up TTW Digital Limited to complete the work required to make that secure, scalable, compliant, low-cost canvassing software available to the whole party, as we believe this is the most effective contribution we can make to the Green Party to help it achieve the best possible results in the May 2026 elections.\n\n- TTW Digital objectives and principles\n- TTW Digital approach and plan\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://docs.google.com/document/d/1-LCbNpBq4TfdWBe_aEUQHUVzr2iID0PqJv7016ENULE/edit?usp=drive_link",
+        "https://docs.google.com/document/d/1-LCbNpBq4TfdWBe_aEUQHUVzr2iID0PqJv7016ENULE/edit?usp=drive_link",
+        "https://drive.google.com/file/d/1cUnfmGE7YFlcnaULiyTZZdpjLCymm6Ea/view?usp=drive_link",
+        "https://drive.google.com/file/d/1cUnfmGE7YFlcnaULiyTZZdpjLCymm6Ea/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 3,
+      "markdown": "# Views from Users\n\n\"Using the TTW app has been an excellent addition to our canvassing operation. The tool makes it easier to log voter data, and get consistent information back from canvassers. It's helped speed up the process on the day as well as post-action data processing. I'm excited we can start using this for the Local 2026 campaign and beyond!\"\n\nCallum Fowler (candidate, St Giles target ward, Southwark)\n\n\"We've just tried out the TTW canvassing software in a group canvassing session in one of our target wards. We got our electoral roll data ready to upload on Wednesday, had it uploaded on Thursday and were out canvassing on Sunday. Our team, comprising a mix of experienced canvassers and first timers, tech-savvy and less so, were able to use the software on their smartphones straight away. It was very straightforward to view elector data for a street and enter the vital details from each conversation.\n\nThe same evening we were able to download the canvass results for us to analyse later. We'll be looking to roll out across all of Lambeth's campaign wards as soon as we can.\"\n\nPete Johnson / Pete Elliott (Election Campaign Co-coordinators, Lambeth Green Party)\n\n## Videos\n\n- Rachael\n- Louisa\n\n\u00a9TTW Digital Limited 2025\n\n4\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/11Pve0w27wGUmqhHTLe2D0JghWqgTAU10/view?usp=drive_link",
+        "https://drive.google.com/file/d/1Qvzd3zaauocl1vFXSdo2FqcZAIUzwlNv/view?usp=drive_link",
+        "https://drive.google.com/file/d/11Pve0w27wGUmqhHTLe2D0JghWqgTAU10/view?usp=drive_link",
+        "https://drive.google.com/file/d/1Qvzd3zaauocl1vFXSdo2FqcZAIUzwlNv/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 4,
+      "markdown": "# Register interest\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 5,
+      "markdown": "# Register Interest Form\n\nBefore you can start, you need to get into our onboarding queue\n\n- Select a representative (preferably your Data Controller) who is authorised to sign up on your local party's behalf\n- Get them to complete the form here\n- Join our Onboarding WhatsApp group here\n\nHome / Register Interest\n\n# REGISTER INTEREST\n\n![img-1.jpeg](img-1.jpeg)\n\n\u00a9TTW Digital Limited 2025\n\n6\n\nTTW Digital",
+      "images": [
+        {
+          "id": "img-1.jpeg",
+          "top_left_x": 1042,
+          "top_left_y": 318,
+          "bottom_right_x": 1842,
+          "bottom_right_y": 1314,
+          "image_base64": null,
+          "image_annotation": null
+        }
+      ],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://ttwdigital.co.uk/onboarding-request",
+        "https://chat.whatsapp.com/L3bKVuDwp1i3ItfMVdO4H3"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 6,
+      "markdown": "# Pre-Reading\n\n## TTW Digital Terms of Service.pdf\n\n- This is our contract with your authorised representative\n- It includes GDPR-compliant terms for acting as a Data Processor for you\n- Note that as Local Parties are \u201cunincorporated associations\u201d, we have to contract with an authorised representative of that association\n\n## TTW Digital End User Licence Agreement\n\n- This is the agreement we require all Users of our service to abide by\n\n## TTW Digital Privacy Policy\n\n- This is how we control the Personal Data of Users of the system\n- Apart from essential communications, we will only contact you and your Users about changes in functionality, new user guides, training etc. (no selling!), and you and your Users can opt-out at any time\n- We do not use any tracking Cookies\n- We encourage all Users, and especially Local Admins, to stay signed up\n\n## TTW Digital - Security Briefing\n\n- Data protection and security are the foundation on which we built our service, and this sets out how we deliver that to local parties\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1kRmH8AaNKRg993n9t2arvqZiqK14HeSu/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ixIB1gp0OQJAlueYUpEW7L9UHijKqGjo/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ixIB1gp0OQJAlueYUpEW7L9UHijKqGjo/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ixIB1gp0OQJAlueYUpEW7L9UHijKqGjo/view?usp=drive_link",
+        "https://drive.google.com/file/d/1_Ya4BgnjByM4XwxDUf-XimNuiREHFZ7v/view?usp=drive_link",
+        "https://drive.google.com/file/d/1GOQ2RqrU5QNLCWcyOhxoep2aCYEEvnUQ/view?usp=drive_link",
+        "https://drive.google.com/file/d/1GOQ2RqrU5QNLCWcyOhxoep2aCYEEvnUQ/view?usp=drive_link",
+        "https://drive.google.com/file/d/1GOQ2RqrU5QNLCWcyOhxoep2aCYEEvnUQ/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 7,
+      "markdown": "# Recommended Preparatory Work\n\nIf you want to get started as soon as you receive our sign-up email, we recommend preparing the following\n\n## Identify at least one additional Local Admin User\n\nSelecting at least one further initial Local Admin(s) is key to the success of the application, as they upload initial data and correct any issues, and set up Users and Rounds\n\n- Select Local Admins carefully - they have privileged access to your data\n- Make sure they read the User Guides\n- Join our Local Admins mutual support WhatsApp channel (coming soon)\n\n## Identify a small number of key activists who can be your first Canvassing Users\n\nThese should be the key activists (e.g. Councillors, target ward Candidates, core campaign team members etc.) who will be involved in the initial canvass\n\nJoin our Onboarding WhatsApp channel here\n\n\u00a9TTW Digital Limited 2025\n\n8\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://chat.whatsapp.com/L3bKVuDwp1i3ItfMVdO4H3"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 8,
+      "markdown": "# Assess your data (1) No pre-existing data\n\nThe minimum required for initial canvassing is the upload of at least a subset of your Electoral Register\n\n- It must be uniquely yours - not shared with any other local parties\n\nIf you do not have any per-existing canvassing data at all, then you should not need to do any further data preparation - you can upload\n\n- A section of the Electoral Register (as little or as much as you want) - the remainder can be uploaded incrementally when you are ready\n- The whole Electoral Register in one go\n\n\u00a9TTW Digital Limited 2025\n\n9\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 9,
+      "markdown": "# Assess your data (2) Pre-Existing data (1)\n\nIf you do have any canvassing data, we can support two approaches\n- Upload basic canvassing data as part of the Electoral Register upload\n- Upload the Electoral Register, then use the Bulk Data Entry screens to record your canvassing data\n\nThe fields we can upload per election\n- Green Voting Intention (i.e. 1-5)\n- Usual Party\n- Whether they voted in the election (historic election only)\n- Postal voter (future election only)\n\nIf you need to do any significant cleansing or alignment of the data, then you may want to use an incremental approach\n\n\u00a9TTW Digital Limited 2025\n10\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 10,
+      "markdown": "# Assess your data (3) Pre-Existing data (2)\n\nIf your data already aligns with your Electoral Register, and with the fields the system can upload, you can upload\n\n- A section of the Electoral Register plus any pre-existing data (as little or as much as you want) - the remainder can be uploaded incrementally when you are ready\n- The whole Electoral Register plus all pre-existing data in one go\n\nIf your data includes fields the system cannot upload (e.g. last knocked date etc.), you can either\n\n- Accept the loss of those particular fields, and load the data in as set out in the previous slide\n- Load the basic Electoral Register, and then manually enter your Pre-Existing canvassing data using the Bulk Data Entry screens\n\nSee also: [User Guide: C3 Electoral Register Initial Upload](User Guide: C3 Electoral Register Initial Upload)\n\nWe are always happy to give advice on specific cases - please contact us here\n\n\u00a9TTW Digital Limited 2025\n\n11\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1U57BkGrv72j-wOmx2c4m3DuIu940XGTa/view?usp=drive_link",
+        "https://drive.google.com/file/d/1U57BkGrv72j-wOmx2c4m3DuIu940XGTa/view?usp=drive_link",
+        "https://drive.google.com/file/d/1U57BkGrv72j-wOmx2c4m3DuIu940XGTa/view?usp=drive_link",
+        "https://docs.google.com/forms/d/e/1FAIpQLSedFVp1f_LgHhPnQNvJkM4hck0AVtYX8UZBZJGjHWvlG8E0iQ/viewform?usp=header"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 11,
+      "markdown": "Responding to your invite\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 12,
+      "markdown": "# Receiving Your Invitation\n\nWhen we are ready, your authorised representative (the individual who completed the Register Interest form) will receive an invite email from info@ttwdigital.co.uk\n\n- You may wish to add that address to your safe senders list to ensure it does not go into your Junk email\n\n\u00a9TTW Digital Limited 2025\n\n13\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "mailto:info%40ttwdigital.co.uk"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 13,
+      "markdown": "# Responding to Your Invitation\n\nTo sign up, you will need to\n\n- Set up your account. See [User Guide A: User Sign-Up](User Guide A: User Sign-Up)\n- Agree to the\n- [TTW Digital Terms of Service.pdf](TTW Digital Terms of Service.pdf)\n- [TTW Digital End User Licence Agreement](TTW Digital End User Licence Agreement)\n- [TTW Digital Privacy Policy](TTW Digital Privacy Policy)\n- Set up a subscription (\u00a345 per local party per month for up to 100 users - more users can be purchased for \u00a35 per 100 user per month)\n- Debit Card\n- Credit Card\n- Direct Debit mandate\nAn invoice will be issued when you sign up and each month thereafter\n\n- All this is managed through our automated onboarding process\n- Note you must sign up using a Credit or Debit card, but after you have signed up you can switch to using a Direct Debit for future months\u2019 payments\n\n\u00a9TTW Digital Limited 2025\n14\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1kRmH8AaNKRg993n9t2arvqZiqK14HeSu/view?usp=drive_link",
+        "https://drive.google.com/file/d/1kRmH8AaNKRg993n9t2arvqZiqK14HeSu/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ixIB1gp0OQJAlueYUpEW7L9UHijKqGjo/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ixIB1gp0OQJAlueYUpEW7L9UHijKqGjo/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ixIB1gp0OQJAlueYUpEW7L9UHijKqGjo/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ixIB1gp0OQJAlueYUpEW7L9UHijKqGjo/view?usp=drive_link",
+        "https://drive.google.com/file/d/1_Ya4BgnjByM4XwxDUf-XimNuiREHFZ7v/view?usp=drive_link",
+        "https://drive.google.com/file/d/1_Ya4BgnjByM4XwxDUf-XimNuiREHFZ7v/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 14,
+      "markdown": "Prepare for your first canvass session\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 15,
+      "markdown": "# Start Canvassing in 5 Steps\n\nBy following these steps (and if your data is ready), you can start canvassing within an hour of signing up\n\n1. Set up at least one Ward - see [User Guide C1: Party Management](User Guide C1: Party Management)\n2. Select/add at least one future Election, and any historical elections for which you have data - see [User Guide C1: Party Management](User Guide C1: Party Management)\n3. Upload your Electoral Register (including additional Canvassing data if mapped into the Electoral Register file) - see [User Guide C3: Electoral Register Initial Upload](User Guide C3: Electoral Register Initial Upload)\n4. Assign the Polling District(s) to the Ward - see [User Guide C1: Party Management](User Guide C1: Party Management)\n5. Optionally, add some Canvassing Users (suggest 2-4) and get them signed up - see\n- [User Guide C2: User Management](User Guide C2: User Management)\n- [User Guide A: User Sign-Up](User Guide A: User Sign-Up)\n\nStart Canvassing - it really is that simple!\n\n\u00a9TTW Digital Limited 2025\n\n16\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1RuzWWV_eAkJ-X9TlybP3gfcdhGa6P-KY/view?usp=sharing",
+        "https://drive.google.com/file/d/1RuzWWV_eAkJ-X9TlybP3gfcdhGa6P-KY/view?usp=sharing",
+        "https://drive.google.com/file/d/1U57BkGrv72j-wOmx2c4m3DuIu940XGTa/view?usp=drive_link",
+        "https://drive.google.com/file/d/1RuzWWV_eAkJ-X9TlybP3gfcdhGa6P-KY/view?usp=sharing",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 16,
+      "markdown": "# Initial load of the Electoral Register\n\nAlthough you can load the data straight into the Live service, we would nevertheless recommend that steps 1 to 4 are checked in our Sandbox environment, to\n\n- Check that the data uploads correctly\n- Check you can see the uploaded data in the Canvassing Screens as expected\n- Ask us any questions about the data load and raise any issues\n\n## For the\n\n- First parties to onboard, we will directly support you with the set up and load into our Sandbox environment\n- Parties onboarding later will be able to check this directly in the Sandbox environment\n\n## Note that\n\n- Data uploaded to our Sandbox environment is deleted every day at midnight\n- We will make a Sandbox environment available to all local parties in due course\n\n\u00a9TTW Digital Limited 2025\n\n17\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 17,
+      "markdown": "# First canvass session\n\nAgree which Streets you are going to Canvass, and whether you are doing that individually, in pairs etc.\n\nIf you have multiple people working a Street, the \u201cAlready Knocked\u201d alerts will mean you won\u2019t accidentally knock the same door twice\n\nIf you want reassurance, print out copies of the relevant Streets, but note that this isn\u2019t strictly necessary unless you know that mobile phone coverage is patchy (a canvasser without the App can buddy up with a User who can then run the board using the App)\n\n- See User Guide: <add>\n\n![img-2.jpeg](img-2.jpeg)\n\n\u00a9TTW Digital Limited 2025\n\n18\n\nTTW Digital</add>",
+      "images": [
+        {
+          "id": "img-2.jpeg",
+          "top_left_x": 1586,
+          "top_left_y": 241,
+          "bottom_right_x": 2344,
+          "bottom_right_y": 1201,
+          "image_base64": null,
+          "image_annotation": null
+        }
+      ],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 18,
+      "markdown": "# Scaling Up\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 19,
+      "markdown": "# Scaling Up (1) Preparation\n\n## Set Up Local Admins\n\nLocal Admins are key to the success of the application, as they set up Users, Rounds and (soon) Action Days, plus they can correct data issues and download data for analysis\n\n- Select Local Admins carefully - they have privileged access to your data\n- Get them signed up as Users (see \u201cInvite Key Activists to be Users\u201d, below)\n- Once they are set up, raise a support request for them to be elevated to Local Admins\n- Make sure they read the User Guides\n- Join our Local Admins mutual support WhatsApp channel (coming soon)\n\n## Load Remaining Data\n\n- If you\u2019ve chosen to upload data incrementally, you should work through loading each increment until you at least have all your Target wards loaded\n\n\u00a9TTW Digital Limited 2025\n\n20\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 20,
+      "markdown": "# Scaling Up (2) Set up Rounds\n\n- The default display of addresses is simply the alphabetical order of the Streets in a Ward and the numerical order of the houses within a Street\n- While this is fine for initial canvassing by experienced canvassers, for canvassers unfamiliar with the area it's really helpful to be guided through a specific route\n- This is why it is worth taking the time to set up Rounds to define specific subsections of a Ward and the route within that subsection - see [User Guide C4: Setting up Rounds](User Guide C4: Setting up Rounds)\n- If you make it a rule that you set up Rounds where needed ahead of each canvassing session, you will find that very quickly you have whole wards fully covered\n\n![img-3.jpeg](img-3.jpeg)\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [
+        {
+          "id": "img-3.jpeg",
+          "top_left_x": 1165,
+          "top_left_y": 664,
+          "bottom_right_x": 2280,
+          "bottom_right_y": 1272,
+          "image_base64": null,
+          "image_annotation": null
+        }
+      ],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://docs.google.com/presentation/d/1fZd9DqU9Yh7nQ9cD4_U6o--PSnTl3mBJ/edit?usp=drive_link&ouid=103581482366906576950&rtpof=true&sd=true"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 21,
+      "markdown": "# Scaling Up (3) Invite Key Activists\n\nSome key activists (e.g. Councillors, target ward Candidates, core campaign team members etc.) will be canvassing frequently and can be trusted to have ongoing access to the ability to canvass\n\n## Options\n\n- Get a Local Admin can create their accounts directly in the App\n- This sends them a sign-up email and/or\n- Get them to register interest here\n- A Local Admin can confirm their request in the App as a \u201cCanvassing\u201d User\n- See User Guides:\n- User Guide C2: User Management\n- User Guide A: User Sign-Up\n\n\u00a9TTW Digital Limited 2025\n\n22\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://ttwdigital.co.uk/onboarding-request",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 22,
+      "markdown": "# Scaling Up (4) Set up Action Days\n\nUsers who don't frequently canvass should be set up as \u201cAction Day\u201d (rather than \u201cCanvassing\u201d) Users.\n\nThis allows you to give controlled access to canvassing data to those Users.\n\nAccess is controlled through setting up Action Days, which specify an Area (Ward), date and time window in which Action Day Users have access to canvassing data.\n\nInitially, only Action Day Users in your local party can access these Action Days.\n\nGoing forward, we will be bringing in functionality to allow you to\n\n- Offer access to Action Day Users in other local parties;\n- Add filters to ensure that canvassing is focused on specific target voter groups.\n\nSee: [User Guide C5: Action Days](User Guide C5: Action Days)\n\n\u00a9TTW Digital Limited 2025\n\n23\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/10pvnVIq4X0nstMPiQDfKDRGveaeT1Vay/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 23,
+      "markdown": "# Scaling Up (5) Demo the App\n\nPeople like it when they see it - so organise a quick demo at your next Members meeting\n\n- Optionally, show\n- [Canvassing demo video](Canvassing demo video)\n- Video clips from Users\n- [Sign up video](Sign up video)\n\n- Consider getting Users to fill in the Interest Registered form at the meeting here\n- If a Local Admin is ready to authorise, you can complete the sign-up process in the meeting\n\nSee:\n- User Guide C2: User Management\n- User Guide A: User Sign-Up\n\n\u00a9TTW Digital Limited 2025\n24\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1hmGQpg7sQUdTDMOxoQhWBOAN6pjyzpiM/view?usp=drive_link",
+        "https://drive.google.com/file/d/1hmGQpg7sQUdTDMOxoQhWBOAN6pjyzpiM/view?usp=drive_link",
+        "https://drive.google.com/drive/folders/1Rq-1RObCWXe5O85EkocURYKP2riAdcHe?usp=drive_link",
+        "https://drive.google.com/drive/folders/1Rq-1RObCWXe5O85EkocURYKP2riAdcHe?usp=drive_link",
+        "https://drive.google.com/file/d/1xUCPXdWRmeBZ-T17BMKxia9y2rcGRKkI/view?usp=drive_link",
+        "https://drive.google.com/file/d/1xUCPXdWRmeBZ-T17BMKxia9y2rcGRKkI/view?usp=drive_link",
+        "https://ttwdigital.co.uk/onboarding-request",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 24,
+      "markdown": "# Scaling Up (6) Invite Other Users\n\nOther members and supporters will only be canvassing at Action Days, and so you will want to limit their access to the data to those days and areas you select\n\n- This is the default User type\n\n## Options\n\n- A Local Admin can create their accounts directly in the App\n- This sends them a sign-up email and/or\n- Get them to register interest here\n- A Local Admin can confirm their request in the App as an \u201cAction Day\u201d User\n\n## See\n\n- User Guide C2: User Management\n- User Guide A: User Sign-Up\n\n\u00a9TTW Digital Limited 2025\n\n25\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://ttwdigital.co.uk/onboarding-request",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1U-DFWPjzHeawDfDGWTZDOt0o6yoU-DfE/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link",
+        "https://drive.google.com/file/d/1ZK2S6dko3WGPzdd-AEKqaySJYNCIlMKb/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 25,
+      "markdown": "# Getting the most out of the App\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 26,
+      "markdown": "# Use Filters\n\nYou can filter who you canvass based\n- Minimum days since last knocked\n- Minimum days since last answered\n- Date added to register\n- Green Voting Intention\n- Usual Party\n- Voted in Previous Election\n- Postal Voter\n\nThis supports, for example\n- Focusing on high propensity voters\n- Focusing on postal voters\n- Persuading GVI 3 voters\n- Squeezing non top-two Usual Party voters\n\n\u00a9TTW Digital Limited 2025\n27\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 27,
+      "markdown": "# Use the Data\n\nThis app isn't itself a Reporting and Analysis system\n\n- We therefore enable (only) your Local Admins to download all your data as .csv file so you can analyse it using whatever applications you prefer (e.g. Excel, Google Sheets etc.) - get that data working for your local campaigns!\n- Join our Data Analysts mutual support WhatsApp channel here.\n\n\u00a9TTW Digital Limited 2025\n\n28\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 28,
+      "markdown": "# Areas under development\n\nWe aim to add these in future versions\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 29,
+      "markdown": "# Current Pipeline\n\nThese will be developed and included as part of your current monthly subscription, in roughly this order\n\n- Electoral Register Update: Feb-25\n- Incremental: in progress\n- Annual: in progress\n- Get Out the Vote: Feb-26\n\n\u00a9TTW Digital Limited 2025\n30\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 30,
+      "markdown": "# Possible future functionality\n\nThere are lots of things we could develop to enhance the system - here's some ideas\n\n- Nationally accessible Action Day calendar and sign-up\n- Dashboard summarising key metrics in your campaign\n- Sharing data across local parties (e.g. for elections that span multiple local parties)\n- Enabling local parties to manage more than one Electoral Register\n- Recording information about new residents\n\nWe are proposing\n\n- Periodically running a poll of local parties to determine the most in-demand requirements\n- For the top couple of requirements, estimate the cost to develop\n- Run a \u201ccrowdfunding\u201d style model to fund the development\n- Develop it and make it available to everyone\n\nExample\n\n- Lots of local parties tell us they want a Campaign Dashboard\n- We estimate it will cost \u00a3500 to develop, and 50 parties agree to pay \u00a310 each\n- We develop it and make it available to everyone\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 31,
+      "markdown": "# Help us make the App better\n\nThousands of hours of volunteer time has gone into getting the App live\n\nIf we can get more of the following volunteer effort, we can accelerate further development and support\n\n- Help us support Users\n- Develop Training Guides, Videos, FAQs etc.\n- Answer queries from Local Admins\n- Moderate our WhatsApp channels\n\n- Help us develop more functionality - we need\n- Business analysts who can write requirements (Stories)\n- Software developers experienced with (or able to quickly learn) PHP Laravel\n- Testers who can write and run tests of new functionality\n\nFill in this form if you would like to discuss how you can help\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://docs.google.com/forms/d/e/1FAIpQLSedFVp1f_LgHhPnQNvJkM4hck0AVtYX8UZBZJGjHWvlG8E0iQ/viewform?usp=sharing&ouid=103581482366906576950"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 32,
+      "markdown": "# Still Have Questions?\n\nWe always welcome feedback, so let us know what we missed\nSend us your enquiry here\n\n\u00a9TTW Digital Limited 2025\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://docs.google.com/forms/d/e/1FAIpQLSedFVp1f_LgHhPnQNvJkM4hck0AVtYX8UZBZJGjHWvlG8E0iQ/viewform?usp=sharing&ouid=103581482366906576950"
+      ],
+      "header": null,
+      "footer": null
+    }
+  ],
+  "model": "mistral-ocr-latest",
+  "usage_info": {
+    "pages_processed": 33,
+    "doc_size_bytes": 675886
+  }
+}

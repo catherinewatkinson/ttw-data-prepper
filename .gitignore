@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# LibreOffice lock files
+.~lock.*
+
+# Large video files (exceed GitHub 100MB limit)
+*.mp4
+
+# Working files
+IMPLEMENTATION_PLAN.md

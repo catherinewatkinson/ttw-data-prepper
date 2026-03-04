@@ -1,0 +1,347 @@
+{
+  "pages": [
+    {
+      "index": 0,
+      "markdown": "User Guide: C3 Electoral Register Initial Upload\n\n01-Mar-2026\n\nColin Boyle (Director)\nPaul Chandler (User Support)\nTTW Digital Limited\n\n\u00a9TTW Digital Limited 2025\n1\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 1,
+      "markdown": "# Context\n\n## Electoral Register Format\n\nThe content of an Electoral Register is defined by legislation, but the precise format is not so defined. This means that\n\n- Each record (row) combines details of a single Elector and their Address\n- The precise fields (columns) used varies by Council\n- Address data is the most affected by this, and so we have developed an algorithm to interpret the various address data formats, however it is not able to achieve 100% accuracy\n\n## Pre-Existing Canvassing Data\n\nMany parties have gathered significant amount of canvassing data, in both previous and current election cycles - if this is the case for your party, then\n\n- Onboarding to TTW Digital - Guide for Local Parties discusses the choices around how to get pre-existing canvassing data into the system\n- This User Guide is predicated on you having selected a migration approach that uses the Electoral Register data upload\n\n## Scope of this User Guide\n\nThis guide sets out the specific steps you need to take to\n\n- Prepare the data file\n- Upload the data file\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1MZmYKyxpEOvccHK7ZGhtadm_B7tESKZZ/view?usp=drive_link",
+        "https://drive.google.com/file/d/1MZmYKyxpEOvccHK7ZGhtadm_B7tESKZZ/view?usp=drive_link",
+        "https://drive.google.com/file/d/1MZmYKyxpEOvccHK7ZGhtadm_B7tESKZZ/view?usp=drive_link",
+        "https://drive.google.com/file/d/1MZmYKyxpEOvccHK7ZGhtadm_B7tESKZZ/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 2,
+      "markdown": "# Segmenting the Electoral Register\n\n\u00a9TTW Digital Limited 2025\n\n3\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 3,
+      "markdown": "# Segmenting the Electoral Register\n\nIn principle, the Electoral Register can be uploaded in a single file, however this is subject to the following considerations and constraints\n\n## Ongoing Data Management\n\nWhen you upload an Electoral Register Incremental (Monthly) update, you will need to manually resolve all ambiguous changes, so the greater the proportion of the Electoral Register you have uploaded, the more work that will be needed to maintain the data.\n\n## File size limit\n\nThe system supports files of up to 100,000 electors.\n\nIf you wish to load up more than this, you will need to create multiple files.\n\n## Incremental Upload\n\nIf you decide to upload a subset of the Electoral Register, you must ensure that you always upload in full each Polling District included in the subset.\n\n## Recommendation\n\nWe recommend only uploading the electoral register for wards that you intend to be active in, adding the Electoral Register incrementally as required for the Polling Districts in Wards as and when they become active.\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 4,
+      "markdown": "# Data Preparation - Electoral Register\n\n\u00a9TTW Digital Limited 2025\n\n5\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 5,
+      "markdown": "# Electoral Register fields (1) Voter\n\nThe Data File can have the following fields for each Elector\n\n|  Data File Column | Definition | Required?  |\n| --- | --- | --- |\n|  Elector No. Prefix | Elector Number Prefix - in practice is the Polling District (e.g. \u201cPD1\u201d) | YES  |\n|  Elector No. | Elector Number (e.g. \u201c136\u201d) | YES  |\n|  Elector No. Suffix | Elector Number Suffix (e.g. \u201c0\u201d) | YES  |\n|  Full Elector No. | Full Elector Number (e.g. \u201cPD1-136-0\u201d)\nNote that this must use \u201c-\u201d as the separator (not e.g. \u201c_\u201d) |   |\n|  Forename | Elector Forename (e.g. \u201cJohn\u201d) | YES  |\n|  Middle Names | Elector Middle Names (e.g. \u201cMichael\u201d)\nNote that this is not displayed within the system |   |\n|  Surname | Elector Surname (e.g. \u201cSmith\u201d) | YES  |\n|  Date of Attainment | The date at which the individual has reached, or is soon to reach, the age at which they can vote\nNote that\n\u2022 This is not their date of birth, and if the Electoral Register contains that, it needs to be first converted into a date of attainment\n\u2022 If an invalid value is entered into this field, the upload will fail (i.e. the field has to either be blank or have a valid date) |   |\n\n\u00a9TTW Digital Limited 2025\n\n6\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 6,
+      "markdown": "# Electoral Register fields (2) Address\n\nThe Data File can have the following fields for each Elector\u2019s address\n\n|  Data File Column | Definition | Required?  |\n| --- | --- | --- |\n|  Address1 | Mapped to the following address fields within the system\n\u2022 House Name | Yes  |\n|  Address2 | \u2022 House Number | Yes  |\n|  Address3 | \u2022 Road Name\nYou must have House Name and/or House Number |   |\n|  Address4-6 | Enabled, but currently other address information (e.g. town, borough etc.) is not imported |   |\n|  PostCode | Post Code | Yes  |\n|  UPRN | Unique Property Reference Number is the unique identifier for every addressable location across the UK, e.g. the UPRN for 10 Downing Street is 100023336956\nhttps://en.wikipedia.org/wiki/Unique_Property_Reference_Number\nNote that this data may be used in future releases |   |\n\n- All addresses will load correctly if they are in one of the supported formats - this will be the case for most records in most Electoral Registers\n- Addresses with Building Names in particular need checking to ensure they are in a supported format\n- Further details on supported formats are given in the following slides\n- Lambeth Green Party has developed an address preparation tool that you may wish to use - please contact pedrojuk@yahoo.co.uk for more details\n- It is not necessary to get every address correct in the initial upload, as Local Admin Users can correct an address as and when an issue is spotted: see User Guide <to be=\"\" added=\"\">\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital</to>",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://en.wikipedia.org/wiki/Unique_Property_Reference_Number",
+        "mailto:pedrojuk%40yahoo.co.uk"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 7,
+      "markdown": "# House Number and Road Name (1)\n\nIf there is no House Name, then a numeric House Number and a Road Name will be correctly interpreted provided they are in either\n\n- Address1 (House Number then Road Name)\n- Address1 (House Number) and Address2 (Road Name)\n\nThis covers the vast majority of addresses and so no manual intervention will be required\n\nExamples - Valid\n\n|  Data File Field\nAddress 1 | Data File Field\nAddress 2 | Data File Field\nAddress 3 | System Field\nHouse Number | System Field\nHouse Name | System Field\nRoad Name  |\n| --- | --- | --- | --- | --- | --- |\n|  8 Coleman Road | - | - | 8 | - | Coleman Road  |\n|  8 | Coleman Road | - | 8 | - | Coleman Road  |\n\nExample - Invalid\n\n|  Data File Field\nAddress 1 | Data File Field\nAddress 2 | Data File Field\nAddress 3 | System Field\nHouse Number | System Field\nHouse Name | System Field\nRoad Name  |\n| --- | --- | --- | --- | --- | --- |\n|  8 | - | Coleman Road | 8 | 8 | Coleman Road  |\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 8,
+      "markdown": "# House Number and Road Name (2)\n\nIf there is no House Name, then a mixed alphanumeric House Number and a Road Name will be correctly interpreted provided they are in either\n\n- Address1 (House Number then Road Name)\n- Address1 (House Number) and Address2 (Road Name)\n\nExamples - Valid\n\n|  Data File Field\nAddress 1 | Data File Field\nAddress 2 | Data File Field\nAddress 3 | System Field\nHouse Number | System Field\nHouse Name | System Field\nRoad Name  |\n| --- | --- | --- | --- | --- | --- |\n|  16A Coleman Road | - | - | 16 | 16A | Coleman Road  |\n|  16B | Coleman Road | - | 16 | 16B | Coleman Road  |\n\nExample - Invalid\n\n|  Data File Field\nAddress 1 | Data File Field\nAddress 2 | Data File Field\nAddress 3 | System Field\nHouse Number | System Field\nHouse Name | System Field\nRoad Name  |\n| --- | --- | --- | --- | --- | --- |\n|  16C | - | Coleman Road | 16C | 16C | Coleman Road  |\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 9,
+      "markdown": "# Building Names (1) Overview\n\nBuilding Names are more complex - if there is a Building Name (this also covers a flat address e.g. \"Basement Flat\") then\n\n- Building Name must be on its own in Address1\n- \u201cOntario Point\u201d\n- \u201cBasement Flat\u201d\n\n- A number or a letter can be included in Address1 provided it is after the name\n- \u201cFlat 1\u201d\n- \u201cFlat B\u201d\n- \u201cOntario Point Flat 1\u201d\n- \u201cOntario Point 1\u201d\n- \u201cOntario Point Flat B\u201d\n- \u201cOntario Point B\u201d\n- \u201c[100-102]\u201d\n\n- House Number and Road Name must follow in either\n- Address2 (House Number then Road Name)\n- Address2 (House Number) and Address3 (Road Name)\n\n- If there is no House Number, then Road Name must follow in Address2\n- House Number will be recorded as \u201c0\u201d (zero)\n\n\u00a9TTW Digital Limited 2025\n\n10\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 10,
+      "markdown": "# Building Names (2) Examples (1) Valid\n\n|  Data File Field Address 1 | Data File Field Address 2 | Data File Field Address 3 | System Field House Number | System Field House Name | System Field Road Name  |\n| --- | --- | --- | --- | --- | --- |\n|  16A Coleman Road | - | - | 16 | 16A | Coleman Road  |\n|  16B | Coleman Road | - | 16 | 16B | Coleman Road  |\n|  South House 14 | 21 Coleman Road | - | 21 | South House 14 | Coleman Road  |\n|  South House | 21 Coleman Road | - | 21 | South House | Coleman Road  |\n|  South House | 21 | Coleman Road | 21 | South House | Coleman Road  |\n|  B | 16 Coleman Road | - | 16 | B | Coleman Road  |\n|  Ontario Point 55 | Coleman Road | - | 0 | Ontario Point 55 | Coleman Road  |\n|  Flat 3, 30 Dalrymple Road | - | - | 30 | Flat 3 | Dalrymple Road  |\n|  James Cottage | 52a Coleman Road |  | 52 | James Cottage 52a | Coleman Road  |\n|  James Cottage 52a | 52 Coleman Road |  | 52 | James Cottage 52a | Coleman Road  |\n\n\u00a9TTW Digital Limited 2025\n\n11\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 11,
+      "markdown": "# Building Names (3) Examples (2) Invalid\n\n|  Data File Field Address 1 | Data File Field Address 2 | Data File Field Address 3 | System Field House Number | System Field House Name | System Field Road Name  |\n| --- | --- | --- | --- | --- | --- |\n|  14 South House | Coleman Road | - | 14 | - | South House  |\n|  56 Flat 1 | Coleman Road | - | 56 | - | Flat 1  |\n|  1ST & 2ND | 9 Coleman Road | - | - | 1ST & 2ND | 9 Coleman Road  |\n|  3 Connell Court, Lindal Road | - | - | 3 | - | Connell Court  |\n\n\u00a9TTW Digital Limited 2025\n\n12\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 12,
+      "markdown": "# Building Names (4) Recommended\n\nTo make Rounds set up easy, the recommended address format is as follows\n\n|  Data File Field Address 1 | Data File Field Address 2 | Data File Field Address 3 | System Field House Number | System Field House Name | System Field Road Name  |\n| --- | --- | --- | --- | --- | --- |\n|  <BUILDING> xxx | <ROAD NAME> | \u2192 | 0 | <BUILDING> xxx | <STREET NAME>  |\n|  <BUILDING> xxx | y <ROAD NAME> | \u2192 | y | <BUILDING> xxx | <STREET NAME>  |\n\n- \u201cxxx\u201d is the flat number using as many preceding zeroes as necessary\n- If a block has 150 addresses, then it should be 001 (first address) 010 100 150 (final address)\n- \u201cy\u201d is the (optional) street number of the building and if blank, is treated as 0\n\n\u00a9TTW Digital Limited 2025\n\n13\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 13,
+      "markdown": "# Data Preparation - Pre-Existing Data\n\n\u00a9TTW Digital Limited 2025\n\n14\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 14,
+      "markdown": "# Pre-Existing Data fields (1)\n\nYou can upload data for up to 10 previous or future elections relating to electors in the current Electoral Register\n\n&gt; Note that each Election must be set up in the system as per \u201cElections\u201d in [User Guide: C1 Party Management](User Guide: C1 Party Management)\n\nFor every election, you can upload the following\n\n|  CSV Column | Definition | Valid Values  |\n| --- | --- | --- |\n|  <ELECTION NAME> Green Voting Intention | Likelihood of voting Green | 1, 2, 3, 4, 5, BLANK  |\n|  <ELECTION NAME> Party | Usual party | See following slide  |\n\nFor a historic election, you can additionally upload\n\n|  CSV Column | Definition | Valid Values  |\n| --- | --- | --- |\n|  <ELECTION NAME> Voted | Whether the elector voted in that election | Any value = \u201cY\u201d\nBLANK = \u201cN\u201d  |\n\nFor a future election, you can additionally upload\n\n|  CSV Column | Definition | Valid Values  |\n| --- | --- | --- |\n|  <ELECTION NAME> Postal Voter | If the elector has a postal vote | Any value = \u201cY\u201d\nBLANK = \u201cN\u201d  |\n\n\u00a9TTW Digital Limited 2025\n\n15\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1RuzWWV_eAkJ-X9TlybP3gfcdhGa6P-KY/view?usp=drive_link",
+        "https://drive.google.com/file/d/1RuzWWV_eAkJ-X9TlybP3gfcdhGa6P-KY/view?usp=drive_link",
+        "https://drive.google.com/file/d/1RuzWWV_eAkJ-X9TlybP3gfcdhGa6P-KY/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 15,
+      "markdown": "# Pre-Existing Data fields (2)\n\nYou can upload data for the following Usual Parties\n- Greens\n- Labour\n- Conservatives\n- Liberal Democrats\n- Reform (and its predecessors)\n- Plaid Cymru\n- Residents Association\n- Independent\n- Others\n\nEnsure you use a consistent coding method, e.g.\n- \u201cG\u201d means \u201cGreen Party\u201d\n- \u201cL\u201d means \u201cLabour\u201d\n- \u201cLD\u201d means \u201cLibDems\u201d\n- \u201cInd\u201d means \u201cIndependent\u201d\netc.\n\n\u00a9TTW Digital Limited 2025\n16\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 16,
+      "markdown": "# Preparing the Data File\n\n\u00a9TTW Digital Limited 2025\n\n17\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 17,
+      "markdown": "# File format (1)\n\nUse one of the templates\n- [Data File Template - Electoral Register Only](Data File Template - Electoral Register Only)\n- [Data File Template - Electoral Register plus Data](Data File Template - Electoral Register plus Data)\n\nor ensure that your data file use these field (column) names (see slides 4, 5 and11)\n\nConfirm the format\n- Ensure that all required fields (columns) have the correct field name (column header) in Row 1\n- Delete any optional fields (columns) for which you do not have data\n- Ensure that your file has field names (column headers) that are unique\n\nCheck the data fields\n- Ensure that all required fields (columns) are populated\n- Ensure that optional fields (columns) are populated where data exists\n- Ensure that fields (columns) have valid data\n- Some electors may have no address (e.g. for security reasons) - ensure these electors have been deleted\n- Specifically check Building Names (see slides 8 and 9)\n\nExample Data Files (populated with test data)\n- [Electoral Register Only](Electoral Register Only)\n- [Electoral Register plus Data](Electoral Register plus Data) for one historic Election and one future Election\n\n\u00a9TTW Digital Limited 2025\n18\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [
+        "https://drive.google.com/file/d/1C8q8roRUEGqTl0m-fGApIk5Lfl9paTz8/view?usp=drive_link",
+        "https://drive.google.com/file/d/1C8q8roRUEGqTl0m-fGApIk5Lfl9paTz8/view?usp=drive_link",
+        "https://drive.google.com/file/d/1C8q8roRUEGqTl0m-fGApIk5Lfl9paTz8/view?usp=drive_link",
+        "https://drive.google.com/file/d/1C8q8roRUEGqTl0m-fGApIk5Lfl9paTz8/view?usp=drive_link",
+        "https://drive.google.com/file/d/1QzdbODDyFsU0ihGl2V3qF8uP_oWUzuPg/view?usp=drive_link",
+        "https://drive.google.com/file/d/1QzdbODDyFsU0ihGl2V3qF8uP_oWUzuPg/view?usp=drive_link",
+        "https://drive.google.com/file/d/1QzdbODDyFsU0ihGl2V3qF8uP_oWUzuPg/view?usp=drive_link",
+        "https://drive.google.com/file/d/1QzdbODDyFsU0ihGl2V3qF8uP_oWUzuPg/view?usp=drive_link",
+        "https://drive.google.com/file/d/11vsS9GKKKd69oszJB7ibuWH_njr9HUlq/view?usp=drive_link",
+        "https://drive.google.com/file/d/11vsS9GKKKd69oszJB7ibuWH_njr9HUlq/view?usp=drive_link",
+        "https://drive.google.com/file/d/1F-eNrIrp8NBku8wxGY99EwIwmjkg3z3B/view?usp=drive_link",
+        "https://drive.google.com/file/d/1F-eNrIrp8NBku8wxGY99EwIwmjkg3z3B/view?usp=drive_link"
+      ],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 18,
+      "markdown": "# File format (2)\n\nThe upload file needs to be saved in a CSV UTF-8 (Comma-Separated Values) format\n\n## Excel files\n\n![img-0.jpeg](img-0.jpeg)\n\n&gt; Note that there are other CSV variants available in Excel - use of those can cause the upload to fail\n\n## Google Sheets\n\n![img-1.jpeg](img-1.jpeg)\n\n\u00a9TTW Digital Limited 2025\n\n19\n\nTTW Digital",
+      "images": [
+        {
+          "id": "img-0.jpeg",
+          "top_left_x": 229,
+          "top_left_y": 408,
+          "bottom_right_x": 1832,
+          "bottom_right_y": 570,
+          "image_base64": null,
+          "image_annotation": null
+        },
+        {
+          "id": "img-1.jpeg",
+          "top_left_x": 229,
+          "top_left_y": 738,
+          "bottom_right_x": 1042,
+          "bottom_right_y": 1320,
+          "image_base64": null,
+          "image_annotation": null
+        }
+      ],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 19,
+      "markdown": "# Upload\n\n\u00a9TTW Digital Limited 2025\n\n20\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    },
+    {
+      "index": 20,
+      "markdown": "# Submit to TTW Support for Upload\n\nFirst parties to onboard, we will directly support you with the set up and load into our Sandbox environment\n\n- Check that the data uploads correctly\n- Check you can see the uploaded data in the Canvassing Screens as expected\n- Ask us any questions about the data load and raise any issues\n\nParties onboarding later will be able to check this directly in the Sandbox environment\n\n- This User Guide will be updated at that point to step through the data upload process\n\n\u00a9TTW Digital Limited 2025\n\nTTW Digital",
+      "images": [],
+      "dimensions": {
+        "dpi": 200,
+        "height": 1500,
+        "width": 2667
+      },
+      "tables": [],
+      "hyperlinks": [],
+      "header": null,
+      "footer": null
+    }
+  ],
+  "model": "mistral-ocr-latest",
+  "usage_info": {
+    "pages_processed": 21,
+    "doc_size_bytes": 276709
+  }
+}

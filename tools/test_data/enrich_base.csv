@@ -1,0 +1,21 @@
+Elector No. Prefix,Elector No.,Elector No. Suffix,Full Elector No.,Surname,Forename,Middle Names,Address1,Address2,Address3,Address4,Address5,Address6,PostCode,UPRN
+KA1,1,0,KA1-1-0,Johnson,Emily,Rose,Flat 1,22 Willesden Lane,,,,,NW10 4QB,100001
+KA1,2,0,KA1-2-0,Kardashian,Kim,,33 Willesden Lane,,,,,,NW10 4QB,100002
+KA1,3,0,KA1-3-0,Van Der Berg,Anna,Marie,45 Chamberlayne Road,,,,,,NW10 3JH,100003
+KA1,4,0,KA1-4-0,O'Brien-Smythe,Sarah,Jane,12 Kilburn High Road,,,,,,NW6 5UA,100004
+KA1,5,0,KA1-5-0,Wu,Li,,Flat 3,88 Brondesbury Road,,,,,NW6 6BX,100005
+KA2,1,0,KA2-1-0,Patel,Arun,Kumar,7 Mapesbury Road,,,,,,NW2 4HT,100006
+KA2,2,0,KA2-2-0,Patel,Priya,Devi,7 Mapesbury Road,,,,,,NW2 4HT,100007
+KA2,3,0,KA2-3-0,Patel,Rajan,,7 Mapesbury Road,,,,,,NW2 4HT,100008
+KA2,4,0,KA2-4-0,Okonkwo,Chioma,,15 Exeter Road,,,,,,NW2 4SE,100009
+KA2,5,0,KA2-5-0,Singh,Gurpreet,Kaur,21 Walm Lane,,,,,,NW2 5SH,100010
+KB1,1,0,KB1-1-0,Thompson,James,Andrew,Flat 2,10 Salusbury Road,,,,,NW6 6NN,100011
+KB1,2,0,KB1-2-0,Ali,Fatima,,8 Christchurch Avenue,,,,,,NW6 7EP,100012
+KB1,3,0,KB1-3-0,Chen,Wei,Ming,4 Brondesbury Villas,,,,,,NW6 6AD,100013
+KB1,4,0,KB1-4-0,Williams,David,John,19 Kilburn Lane,,,,,,W10 4AE,100014
+KB1,5,0,KB1-5-0,Martinez,Carlos,,Flat 7,25 Cambridge Road,,,,,NW6 5JE,100015
+KB2,1,0,KB2-1-0,Brown,Michael,,91 Kilburn High Road,,,,,,NW6 7HY,100016
+KB2,2,0,KB2-2-0,Nguyen,Thi,Lan,3 Stafford Road,,,,,,NW6 5RS,100017
+KB2,3,0,KB2-3-0,Abdi,Hassan,,27 Willesden Lane,,,,,,NW6 7RD,100018
+KB2,4,0,KB2-4-0,Kowalski,Agnieszka,,Flat 4,55 Brondesbury Park,,,,,NW6 7AT,100019
+KB2,5,0,KB2-5-0,De Silva,Ranjith,Perera,8 Quex Road,,,,,,NW6 4PH,100020
