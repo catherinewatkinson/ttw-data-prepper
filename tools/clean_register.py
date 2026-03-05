@@ -611,7 +611,7 @@ def _looks_like_road(text):
 def reformat_addresses(row, row_num, report):
     """Auto-fix detectable address formatting issues, flag ambiguous patterns.
 
-    Fix order: 1 (gap) -> 2 (flat comma) -> 2b (comma-free flat+road) -> 3 (number before flat) -> 4 (number before building)
+    Fix order: 1 (gap) -> 1b (dual-number bracket) -> 2 (flat comma) -> 2b (comma-free flat+road) -> 3 (number before flat) -> 4 (number before building)
     Each fix refreshes local vars after modifying row.
     """
     # --- Fix 1: Address gap (Address2 empty, Address3+ has data) ---
@@ -632,6 +632,41 @@ def reformat_addresses(row, row_num, report):
             row[f] = new_values[i]
 
     # Refresh locals after fix 1
+    addr1 = row.get("Address1", "")
+    addr2 = row.get("Address2", "")
+
+    # --- Fix 1b: Auto-bracket dual-number addresses ---
+    # Skip if Address1 already starts with bracket notation
+    if addr1 and not addr1.startswith("["):
+        # Case A: "N, N road" in Address1 (comma-separated dual numbers)
+        dual_comma = re.match(r"^(\d+)\s*,\s*(\d+.*)$", addr1)
+        if dual_comma:
+            old_addr1 = addr1
+            new_addr1 = f"[{dual_comma.group(1)}], {dual_comma.group(2)}"
+            row["Address1"] = new_addr1
+            report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
+                "dual-number auto-bracketed"))
+        else:
+            # Case B: "N N something" (space-separated, 2nd token starts with digit, >=3 tokens)
+            tokens = addr1.split()
+            if (len(tokens) >= 3
+                    and re.match(r"^\d+$", tokens[0])
+                    and tokens[1][0].isdigit()):
+                old_addr1 = addr1
+                new_addr1 = f"[{tokens[0]}], {' '.join(tokens[1:])}"
+                row["Address1"] = new_addr1
+                report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
+                    "dual-number auto-bracketed"))
+            else:
+                # Case C: Address1 = bare number, Address2 starts with digit
+                if re.match(r"^\d+$", addr1) and addr2 and addr2[0].isdigit():
+                    old_addr1 = addr1
+                    new_addr1 = f"[{addr1}]"
+                    row["Address1"] = new_addr1
+                    report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
+                        "dual-number auto-bracketed"))
+
+    # Refresh locals after fix 1b
     addr1 = row.get("Address1", "")
     addr2 = row.get("Address2", "")
 
@@ -731,7 +766,9 @@ def reformat_addresses(row, row_num, report):
     if "," in addr1:
         # Check if it's a flat comma pattern (which was already handled above)
         flat_match = re.match(r"^((?:Flat|Unit|Apt|Room)\s+\S+)\s*,", addr1, re.IGNORECASE)
-        if not flat_match:
+        # Check if it's a bracketed prefix (e.g. "[506], 10 Evelina Gardens")
+        bracket_match = re.match(r"^\[.+?\]\s*,", addr1)
+        if not flat_match and not bracket_match:
             report.warnings.append((row_num, "Address1", addr1,
                 "NEEDS MANUAL FIX: Contains comma but not a 'Flat X, N Road' pattern -- may need manual splitting"))
 
@@ -745,6 +782,41 @@ def reformat_addresses(row, row_num, report):
                 f"Flat designation with {word_count} words and no comma -- may need manual splitting"))
 
     # Note: bracket notation (e.g. "[100-102]") is valid per UG C3 slide 10 — no warning needed.
+
+
+def zero_pad_flat_numbers(rows, report):
+    """Zero-pad flat numbers for consistent sort order within each building.
+
+    Groups rows by (Address2, PostCode). Within each group, pads numeric
+    flat IDs to the maximum width found (e.g. Flat 1 -> Flat 01 if max is 12).
+    """
+    flat_re = re.compile(r"^((?:Flat|Unit|Apt|Room)\s+)(\d+)([A-Za-z]?)$", re.IGNORECASE)
+
+    # Build groups: (Address2, PostCode) -> [(index, match)]
+    groups = defaultdict(list)
+    for i, row in enumerate(rows):
+        addr1 = row.get("Address1", "")
+        addr2 = row.get("Address2", "")
+        postcode = row.get("PostCode", "")
+        if not addr2:
+            continue
+        m = flat_re.match(addr1)
+        if m:
+            groups[(addr2, postcode)].append((i, m))
+
+    for key, members in groups.items():
+        max_width = max(len(m.group(2)) for _, m in members)
+        if max_width <= 1:
+            continue
+        for idx, m in members:
+            num_str = m.group(2)
+            if len(num_str) < max_width:
+                old_addr1 = rows[idx]["Address1"]
+                padded = num_str.zfill(max_width)
+                new_addr1 = f"{m.group(1)}{padded}{m.group(3)}"
+                rows[idx]["Address1"] = new_addr1
+                report.fixes.append((idx + 2, "Address1", old_addr1, new_addr1,
+                    "flat number zero-padded for sort order"))
 
 
 # ---------------------------------------------------------------------------
@@ -1035,6 +1107,9 @@ def main():
     # --- Step 6.6: Reformat addresses ---
     for i, row in enumerate(mapped_rows):
         reformat_addresses(row, i + 2, report)
+
+    # --- Step 6.7: Zero-pad flat numbers ---
+    zero_pad_flat_numbers(mapped_rows, report)
 
     # --- Step 7: Compute suffix ---
     suffix_needs_column = args.suffix_mode in ("from-column", "normalize")

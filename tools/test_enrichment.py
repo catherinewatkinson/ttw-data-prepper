@@ -4,7 +4,7 @@
 Usage:
     python3 tools/test_enrichment.py                            # All tests
     python3 tools/test_enrichment.py -v                         # Verbose
-    python3 tools/test_enrichment.py TestExactMatch             # Single class
+    python3 tools/test_enrichment.py TestFuzzyRegisterMatch     # Single class
 
 Uses stdlib unittest. Zero external dependencies.
 """
@@ -111,8 +111,8 @@ class TestInputValidation(unittest.TestCase):
         self.assertIn("at least one", err.lower())
 
     def test_enriched_register_missing_columns(self):
-        """Error if PDCode/RollNo missing from enriched register."""
-        # Create a CSV without PDCode
+        """Error if PostCode or name columns missing from enriched register."""
+        # Create a CSV without PostCode
         headers = ["Name", "Party"]
         rows = [{"Name": "Test", "Party": "Lab"}]
         bad_csv = write_temp_csv(rows, headers)
@@ -123,7 +123,7 @@ class TestInputValidation(unittest.TestCase):
              "--report", self.report])
         os.unlink(bad_csv)
         self.assertNotEqual(rc, 0)
-        self.assertIn("missing required columns", err.lower())
+        self.assertIn("missing required column", err.lower())
 
     def test_canvassing_missing_columns(self):
         """Error if profile_name/address 1 missing from canvassing export."""
@@ -149,13 +149,32 @@ class TestInputValidation(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertIn("different from base", err.lower())
 
+    def test_alternative_column_names(self):
+        """ER with 'First Name'/'Last Name' instead of 'Forename'/'Surname' accepted."""
+        headers = ["First Name", "Last Name", "PostCode", "GE24", "Party"]
+        rows = [{"First Name": "Emily", "Last Name": "Johnson",
+                 "PostCode": "NW10 4QB", "GE24": "v", "Party": "GREEN"}]
+        alt_csv = write_temp_csv(rows, headers)
+        rc, out, err = run_enrich(
+            BASE_CSV, self.output,
+            ["--enriched-register", alt_csv,
+             "--historic-elections", "GE2024",
+             "--report", self.report])
+        os.unlink(alt_csv)
+        self.assertEqual(rc, 0, f"Script failed with alternative column names: {err}")
+        _, out_rows = read_output_csv(self.output)
+        # Emily Johnson should have matched
+        ka1_1 = [r for r in out_rows if r["Elector No. Prefix"] == "KA1"
+                 and r["Elector No."] == "1"][0]
+        self.assertEqual(ka1_1["GE2024 Party"], "G")
+
 
 # ---------------------------------------------------------------------------
-# TestExactMatch
+# TestFuzzyRegisterMatch
 # ---------------------------------------------------------------------------
 
-class TestExactMatch(unittest.TestCase):
-    """Tests for enriched register exact matching by PDCode+RollNo."""
+class TestFuzzyRegisterMatch(unittest.TestCase):
+    """Tests for enriched register fuzzy matching by name+postcode."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -172,7 +191,7 @@ class TestExactMatch(unittest.TestCase):
         self.assertEqual(rc, 0, f"Script failed: {err}")
         return read_output_csv(self.output)
 
-    def test_basic_match_by_pdcode_rollno(self):
+    def test_basic_match_by_name_postcode(self):
         """15/18 enriched rows match (minus 2 unmatched ZZ9 + 1 duplicate)."""
         headers, rows = self._run_register_only()
         # Check that matched rows got data
@@ -182,32 +201,28 @@ class TestExactMatch(unittest.TestCase):
         self.assertEqual(ka1_1["GE2024 Voted"], "v")
 
     def test_unmatched_rows_in_report(self):
-        """2 unmatched enriched rows (ZZ9-99, ZZ9-100) appear in report."""
+        """2 unmatched enriched rows (Ghost Voter, Phantom Resident) appear in report."""
         self._run_register_only()
         text, _ = read_report(self.report)
-        self.assertIn("ZZ9-99", text)
-        self.assertIn("ZZ9-100", text)
+        self.assertIn("Ghost Voter", text)
+        self.assertIn("Phantom Resident", text)
 
     def test_duplicate_key_takes_first_warns(self):
-        """Duplicate PDCode+RollNo KA2-1: first row used, warning logged."""
+        """Duplicate ER row Arun Patel: first row used, warning logged."""
         headers, rows = self._run_register_only()
-        # KA2-1 first row has "Supports recycling" = empty, Comments should be empty
-        # Actually first row for KA2-1 has no Comments, second has "Updated"
         ka2_1 = [r for r in rows if r["Elector No. Prefix"] == "KA2"
                  and r["Elector No."] == "1"][0]
         # First occurrence has empty Comments
         self.assertEqual(ka2_1["Comments"], "")
         # Check warning in report
         text, _ = read_report(self.report)
-        self.assertIn("duplicate key ka2-1", text.lower())
+        self.assertIn("duplicate", text.lower())
+        self.assertIn("arun patel", text.lower())
 
     def test_match_rate_in_report_summary(self):
         """Report shows match rate."""
         self._run_register_only()
         text, _ = read_report(self.report)
-        # 15 unique keys, 2 unmatched ZZ9 = 13 matched of 15 unique
-        # Actually: 18 rows - 1 dup = 17 unique, 15 match + 2 ZZ9 unmatched
-        # Wait: KA2-1 appears twice -> 17 unique keys, 15 matched, 2 unmatched
         self.assertIn("matched", text.lower())
 
     def test_all_base_rows_in_output(self):
@@ -223,6 +238,62 @@ class TestExactMatch(unittest.TestCase):
             for col in ("Forename", "Surname", "Address1", "PostCode"):
                 self.assertEqual(out_row[col], base_row[col],
                                  f"Column {col} modified for {base_row['Full Elector No.']}")
+
+    def test_patel_family_disambiguation(self):
+        """3 Patels at NW2 4HT each match correct base row."""
+        headers, rows = self._run_register_only()
+        # Arun Patel -> KA2-1 (LABOUR)
+        ka2_1 = [r for r in rows if r["Full Elector No."] == "KA2-1-0"][0]
+        self.assertEqual(ka2_1["GE2024 Party"], "Lab")
+        # Priya Patel -> KA2-2 (DID NOT VOTE -> blank)
+        ka2_2 = [r for r in rows if r["Full Elector No."] == "KA2-2-0"][0]
+        self.assertEqual(ka2_2["GE2024 Party"], "")
+        # Rajan Patel -> KA2-3 (GREEN -> G)
+        ka2_3 = [r for r in rows if r["Full Elector No."] == "KA2-3-0"][0]
+        self.assertEqual(ka2_3["GE2024 Party"], "G")
+
+    def test_no_postcode_fallback(self):
+        """ER row with blank PostCode attempts all-base match at 0.95."""
+        # Create ER with blank postcode but exact name match
+        headers = ["Forename", "Surname", "PostCode", "GE24", "Party"]
+        rows = [{"Forename": "Emily", "Surname": "Johnson",
+                 "PostCode": "", "GE24": "v", "Party": "GREEN"}]
+        er_csv = write_temp_csv(rows, headers)
+        rc, out, err = run_enrich(
+            BASE_CSV, self.output,
+            ["--enriched-register", er_csv,
+             "--historic-elections", "GE2024",
+             "--report", self.report])
+        os.unlink(er_csv)
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        # With no postcode, threshold is 0.95 — Emily Johnson should still match
+        # since _surname_forename_similarity("Johnson","Emily","Johnson","Emily") = 1.0
+        _, out_rows = read_output_csv(self.output)
+        ka1_1 = [r for r in out_rows if r["Elector No. Prefix"] == "KA1"
+                 and r["Elector No."] == "1"][0]
+        self.assertEqual(ka1_1["GE2024 Party"], "G")
+
+    def test_different_postcode_unmatched(self):
+        """ER row with valid but non-matching postcode -> unmatched."""
+        headers = ["Forename", "Surname", "PostCode", "GE24", "Party"]
+        rows = [{"Forename": "Emily", "Surname": "Johnson",
+                 "PostCode": "SW1A 1AA", "GE24": "v", "Party": "GREEN"}]
+        er_csv = write_temp_csv(rows, headers)
+        rc, out, err = run_enrich(
+            BASE_CSV, self.output,
+            ["--enriched-register", er_csv,
+             "--historic-elections", "GE2024",
+             "--report", self.report])
+        os.unlink(er_csv)
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        # No base rows at SW1A 1AA, falls back to all-base at 0.95
+        # Emily Johnson should match since name similarity = 1.0
+        # (the fallback kicks in when postcode has no candidates)
+        _, out_rows = read_output_csv(self.output)
+        ka1_1 = [r for r in out_rows if r["Elector No. Prefix"] == "KA1"
+                 and r["Elector No."] == "1"][0]
+        # Name score 1.0 >= 0.95 threshold, so should match via fallback
+        self.assertEqual(ka1_1["GE2024 Party"], "G")
 
 
 # ---------------------------------------------------------------------------
@@ -631,9 +702,9 @@ class TestOutputFormat(unittest.TestCase):
     def test_encoding_mixed_inputs(self):
         """UTF-8 BOM base + Latin-1 enrichment: no crash."""
         # Create a Latin-1 encoded enrichment file
-        headers = ["PDCode", "RollNo", "Forename", "Surname", "GE24", "Party"]
-        rows = [{"PDCode": "KA1", "RollNo": "1", "Forename": "Emily",
-                 "Surname": "Johnson", "GE24": "v", "Party": "GREEN"}]
+        headers = ["Forename", "Surname", "PostCode", "GE24", "Party"]
+        rows = [{"Forename": "Emily", "Surname": "Johnson",
+                 "PostCode": "NW10 4QB", "GE24": "v", "Party": "GREEN"}]
         latin1_csv = write_temp_csv(rows, headers, encoding="latin-1")
         rc, out, err = run_enrich(
             BASE_CSV, self.output,
@@ -740,12 +811,12 @@ class TestQAReport(unittest.TestCase):
         self.assertIn("Questions to Resolve", text)
 
     def test_machine_readable_section(self):
-        """CONFLICT and WARNING entries parseable."""
+        """CONFLICT, WARNING, MATCH, and OVERWRITE entries parseable."""
         text, machine = self._run_both()
         self.assertIn("### MACHINE-READABLE SECTION ###", text)
         self.assertIn("### END MACHINE-READABLE SECTION ###", text)
         # All machine lines should start with a known prefix
-        valid_prefixes = ("CONFLICT", "WARNING", "MATCH")
+        valid_prefixes = ("CONFLICT", "WARNING", "MATCH", "OVERWRITE")
         for line in machine:
             self.assertTrue(
                 any(line.startswith(p) for p in valid_prefixes),
@@ -766,10 +837,10 @@ class TestEdgeCases(unittest.TestCase):
 
     def test_empty_enrichment_no_crash(self):
         """Enrichment CSV with no matching rows: all enrichment columns empty."""
-        # Create an enrichment CSV with no matching keys
-        headers = ["PDCode", "RollNo", "Forename", "Surname", "GE24", "Party"]
-        rows = [{"PDCode": "ZZ1", "RollNo": "999", "Forename": "Nobody",
-                 "Surname": "Here", "GE24": "v", "Party": "GREEN"}]
+        # Create an enrichment CSV with no matching names/postcodes
+        headers = ["Forename", "Surname", "PostCode", "GE24", "Party"]
+        rows = [{"Forename": "Nobody", "Surname": "Here",
+                 "PostCode": "ZZ1 9ZZ", "GE24": "v", "Party": "GREEN"}]
         empty_csv = write_temp_csv(rows, headers)
         rc, out, err = run_enrich(
             BASE_CSV, self.output,
@@ -821,6 +892,148 @@ class TestEdgeCases(unittest.TestCase):
         # Check that the output is valid regardless
         _, out_rows = read_output_csv(self.output)
         self.assertEqual(len(out_rows), 20)
+
+
+# ---------------------------------------------------------------------------
+# TestPreExistingColumns
+# ---------------------------------------------------------------------------
+
+class TestPreExistingColumns(unittest.TestCase):
+    """Tests for re-enrichment when base already has election columns."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.output1 = os.path.join(self.tmpdir, "enriched1.csv")
+        self.output2 = os.path.join(self.tmpdir, "enriched2.csv")
+        self.report1 = os.path.join(self.tmpdir, "report1.txt")
+        self.report2 = os.path.join(self.tmpdir, "report2.txt")
+
+    def _run_first_enrichment(self):
+        """Run initial enrichment producing output1."""
+        rc, out, err = run_enrich(
+            BASE_CSV, self.output1,
+            ["--enriched-register", str(REGISTER_CSV),
+             "--historic-elections", "GE2024",
+             "--future-elections", "2026",
+             "--report", self.report1])
+        self.assertEqual(rc, 0, f"First enrichment failed: {err}")
+
+    def _run_second_enrichment(self):
+        """Run enrichment again on output1 -> output2."""
+        rc, out, err = run_enrich(
+            self.output1, self.output2,
+            ["--enriched-register", str(REGISTER_CSV),
+             "--historic-elections", "GE2024",
+             "--future-elections", "2026",
+             "--report", self.report2])
+        self.assertEqual(rc, 0, f"Second enrichment failed: {err}")
+
+    def test_existing_election_columns_not_duplicated(self):
+        """Header appears once in output even when base already has it."""
+        self._run_first_enrichment()
+        self._run_second_enrichment()
+        headers, _ = read_output_csv(self.output2)
+        ge2024_party_count = headers.count("GE2024 Party")
+        self.assertEqual(ge2024_party_count, 1,
+                         f"GE2024 Party appears {ge2024_party_count} times in headers")
+
+    def test_existing_value_not_overwritten_by_blank(self):
+        """Non-empty base value preserved when ER has no data for that row."""
+        self._run_first_enrichment()
+        self._run_second_enrichment()
+        _, rows = read_output_csv(self.output2)
+        # KA1-1 has GE2024 Party = G from first enrichment; second should preserve it
+        ka1_1 = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        self.assertEqual(ka1_1["GE2024 Party"], "G")
+
+    def test_overwrite_logged_in_report(self):
+        """Changed values appear in report overwrite details."""
+        self._run_first_enrichment()
+        self._run_second_enrichment()
+        text, _ = read_report(self.report2)
+        # The report should mention existing columns being updated
+        self.assertIn("Existing Columns Updated", text)
+
+    def test_re_enrichment_pipeline(self):
+        """Enrich -> enrich again: no dup headers, correct data."""
+        self._run_first_enrichment()
+        self._run_second_enrichment()
+        headers1, rows1 = read_output_csv(self.output1)
+        headers2, rows2 = read_output_csv(self.output2)
+        # Same number of rows
+        self.assertEqual(len(rows1), len(rows2))
+        # No duplicate headers in output2
+        self.assertEqual(len(headers2), len(set(headers2)),
+                         f"Duplicate headers found: {[h for h in headers2 if headers2.count(h) > 1]}")
+        # Key data should be identical
+        for r1, r2 in zip(rows1, rows2):
+            self.assertEqual(r1["GE2024 Party"], r2["GE2024 Party"],
+                             f"GE2024 Party changed for {r1['Full Elector No.']}")
+
+
+# ---------------------------------------------------------------------------
+# TestColumnMappingReport
+# ---------------------------------------------------------------------------
+
+class TestColumnMappingReport(unittest.TestCase):
+    """Tests for column mapping and match score reporting."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.output = os.path.join(self.tmpdir, "output.csv")
+        self.report = os.path.join(self.tmpdir, "report.txt")
+
+    def _run_register_only(self):
+        rc, out, err = run_enrich(
+            BASE_CSV, self.output,
+            ["--enriched-register", str(REGISTER_CSV),
+             "--historic-elections", "GE2024",
+             "--future-elections", "2026",
+             "--report", self.report])
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        return read_report(self.report)
+
+    def test_new_columns_created_section(self):
+        """New columns listed in report when enriching fresh base."""
+        text, _ = self._run_register_only()
+        self.assertIn("New Columns Created", text)
+        self.assertIn("GE2024 Party", text)
+
+    def test_confident_match_scores_in_report(self):
+        """Confident matches with scores in machine-readable section."""
+        text, machine = self._run_register_only()
+        confident_lines = [l for l in machine
+                           if l.startswith("MATCH") and "confident" in l.lower()]
+        self.assertTrue(len(confident_lines) > 0,
+                        "Expected confident match entries in machine-readable section")
+        # Check format includes Score
+        for line in confident_lines:
+            self.assertIn("Score=", line)
+
+    def test_column_mapping_in_report(self):
+        """Re-enrichment report shows existing columns updated."""
+        # First enrichment
+        output1 = os.path.join(self.tmpdir, "enriched1.csv")
+        report1 = os.path.join(self.tmpdir, "report1.txt")
+        rc, _, err = run_enrich(
+            BASE_CSV, output1,
+            ["--enriched-register", str(REGISTER_CSV),
+             "--historic-elections", "GE2024",
+             "--future-elections", "2026",
+             "--report", report1])
+        self.assertEqual(rc, 0, f"First enrichment failed: {err}")
+        # Second enrichment on output of first
+        output2 = os.path.join(self.tmpdir, "enriched2.csv")
+        report2 = os.path.join(self.tmpdir, "report2.txt")
+        rc, _, err = run_enrich(
+            output1, output2,
+            ["--enriched-register", str(REGISTER_CSV),
+             "--historic-elections", "GE2024",
+             "--future-elections", "2026",
+             "--report", report2])
+        self.assertEqual(rc, 0, f"Second enrichment failed: {err}")
+        text, _ = read_report(report2)
+        self.assertIn("Existing Columns Updated", text)
 
 
 # ---------------------------------------------------------------------------

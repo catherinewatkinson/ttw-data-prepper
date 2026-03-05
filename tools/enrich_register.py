@@ -60,8 +60,18 @@ class EnrichQAReport:
         # Enriched register matching
         self.er_total = 0
         self.er_matched = 0
-        self.er_unmatched = []      # [(pdcode, rollno, name)]
-        self.er_duplicate_keys = [] # [(pdcode, rollno, count)]
+        self.er_unmatched = []      # [(postcode, er_display_name)]
+        self.er_possible = []       # [(name, postcode, score, candidate_name)]
+        self.er_ambiguous = []      # [(name, postcode, [(candidate_name, score)])]
+        self.er_confident_matches = [] # [(er_name, base_name, postcode, score)]
+        self.er_duplicate_keys = [] # [(name, postcode, count)]
+
+        # Column mapping and overwrite tracking
+        self.column_mapping = []           # [(source_col, target_col)]
+        self.new_columns_created = []      # [col_name]
+        self.existing_columns_updated = [] # [col_name]
+        self.overwrite_details = []        # [(row_key, field, old, new)]
+        self.preserved_count = 0           # fields where blank incoming preserved non-empty existing
 
         # Canvassing export matching
         self.ce_total = 0
@@ -111,17 +121,28 @@ class EnrichQAReport:
         if self.enriched_register_file:
             lines.append("--- Enriched Register Matching ---")
             lines.append(f"Total rows: {self.er_total}")
-            lines.append(f"Matched: {self.er_matched}")
+            lines.append(f"Confident matches: {self.er_matched}")
             lines.append(f"Unmatched: {len(self.er_unmatched)}")
-            lines.append(f"Duplicate keys: {len(self.er_duplicate_keys)}")
+            lines.append(f"Possible matches: {len(self.er_possible)}")
+            lines.append(f"Ambiguous matches: {len(self.er_ambiguous)}")
+            lines.append(f"Duplicate ER rows (same base): {len(self.er_duplicate_keys)}")
             if self.er_unmatched:
                 lines.append("  Unmatched rows:")
-                for pdcode, rollno, name in self.er_unmatched:
-                    lines.append(f"    {pdcode}-{rollno} ({name})")
+                for postcode, name in self.er_unmatched:
+                    lines.append(f"    {name} ({postcode})")
+            if self.er_possible:
+                lines.append("  Possible matches (for human review):")
+                for name, postcode, score, candidate in self.er_possible:
+                    lines.append(f"    \"{name}\" ({postcode}) -> \"{candidate}\" (score={score:.3f})")
+            if self.er_ambiguous:
+                lines.append("  Ambiguous matches:")
+                for name, postcode, candidates in self.er_ambiguous:
+                    cand_str = ", ".join(f"\"{n}\" ({s:.3f})" for n, s in candidates)
+                    lines.append(f"    \"{name}\" ({postcode}): {cand_str}")
             if self.er_duplicate_keys:
-                lines.append("  Duplicate keys:")
-                for pdcode, rollno, count in self.er_duplicate_keys:
-                    lines.append(f"    {pdcode}-{rollno}: {count} occurrences")
+                lines.append("  Duplicate ER rows matching same base:")
+                for name, postcode, count in self.er_duplicate_keys:
+                    lines.append(f"    {name} ({postcode}): {count} occurrences (first used)")
             lines.append("")
 
         # --- Canvassing Export Matching ---
@@ -197,6 +218,37 @@ class EnrichQAReport:
                 lines.append(f"  {q}")
             lines.append("")
 
+        # --- Column Mapping ---
+        if self.column_mapping:
+            lines.append("--- Column Mapping ---")
+            for source, target in self.column_mapping:
+                lines.append(f"  {source} -> {target}")
+            lines.append("")
+
+        # --- New Columns Created ---
+        if self.new_columns_created:
+            lines.append("--- New Columns Created ---")
+            for col in self.new_columns_created:
+                lines.append(f"  {col}")
+            lines.append("")
+
+        # --- Existing Columns Updated ---
+        if self.existing_columns_updated:
+            lines.append("--- Existing Columns Updated ---")
+            for col in self.existing_columns_updated:
+                lines.append(f"  {col}")
+            lines.append("")
+
+        # --- Overwrite Details ---
+        if self.overwrite_details or self.preserved_count:
+            lines.append("--- Overwrite Details ---")
+            if self.overwrite_details:
+                for row_key, field, old, new in self.overwrite_details:
+                    lines.append(f"  Row {row_key}: {field} \"{old}\" -> \"{new}\"")
+            if self.preserved_count:
+                lines.append(f"  Preserved {self.preserved_count} existing value(s) where incoming was blank")
+            lines.append("")
+
         # --- Machine-readable footer ---
         lines.append("### MACHINE-READABLE SECTION ###")
         for row_key, field, er_val, ce_val, resolved in self.conflicts:
@@ -206,14 +258,20 @@ class EnrichQAReport:
         for w in self.warnings:
             lines.append(f"WARNING|{w}")
         if self.enriched_register_file:
-            for pdcode, rollno, name in self.er_unmatched:
+            for postcode, name in self.er_unmatched:
                 lines.append(f"MATCH|Source=enriched_register|Status=unmatched"
-                             f"|Key={pdcode}-{rollno}|Name={name}")
+                             f"|PostCode={postcode}|Name={name}")
+            for er_name, base_name, postcode, score in self.er_confident_matches:
+                lines.append(f"MATCH|Source=enriched_register|Status=confident"
+                             f"|ERName={er_name}|BaseName={base_name}"
+                             f"|PostCode={postcode}|Score={score:.3f}")
         if self.canvassing_export_file:
             for profile_name, addr, score, candidate in self.ce_possible:
                 lines.append(f"MATCH|Source=canvassing|Status=possible"
                              f"|Name={profile_name}|Score={score:.3f}"
                              f"|Candidate={candidate}")
+        for row_key, field, old, new in self.overwrite_details:
+            lines.append(f"OVERWRITE|Row={row_key}|Field={field}|Old={old}|New={new}")
         lines.append("### END MACHINE-READABLE SECTION ###")
 
         Path(path).write_text("\n".join(lines), encoding="utf-8")
@@ -293,6 +351,16 @@ def _name_similarity(name_a, name_b):
     return _dice_coefficient(a, b)
 
 
+def _surname_forename_similarity(surname_a, forename_a, surname_b, forename_b):
+    """Score = 0.6 * surname_similarity + 0.4 * forename_similarity.
+
+    Prioritises surname (more discriminating across families). For same-family
+    disambiguation, the 40% forename weight provides sufficient margin.
+    """
+    return (0.6 * _name_similarity(surname_a, surname_b)
+            + 0.4 * _name_similarity(forename_a, forename_b))
+
+
 def _address_similarity(addr_a, addr_b):
     """Compare two address strings using Dice coefficient."""
     return _dice_coefficient(addr_a or "", addr_b or "")
@@ -320,50 +388,150 @@ def _extract_postcode(row_dict, field_order=("address 4", "address 3", "address 
 
 
 # ---------------------------------------------------------------------------
-# Exact matching (enriched register)
+# Overwrite-safe field setter
 # ---------------------------------------------------------------------------
 
-def match_enriched_register(base_rows, er_rows, report):
-    """Match enriched register rows to base by PDCode+RollNo.
+def _set_field(row, field, new_value, row_key, report):
+    """Set field with overwrite protection.
+
+    - Non-empty incoming that differs from existing: overwrite, log to report.
+    - Empty incoming: skip (preserve existing).
+    - Same value: no-op.
+    """
+    existing = row.get(field, "")
+    if not new_value:
+        # Empty incoming: preserve existing
+        if existing:
+            report.preserved_count += 1
+        return
+    if existing and existing != new_value:
+        # Overwrite: log the change
+        report.overwrite_details.append((row_key, field, existing, new_value))
+    row[field] = new_value
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy matching (enriched register)
+# ---------------------------------------------------------------------------
+
+def match_enriched_register(base_rows, er_rows, threshold, report):
+    """Match enriched register rows to base by fuzzy name+postcode.
     Returns dict: base_index -> er_row."""
-    # Build base lookup: (prefix, number) -> index
-    base_lookup = {}
+    AMBIGUITY_MARGIN = 0.15
+    POSSIBLE_THRESHOLD = 0.6
+    NO_POSTCODE_THRESHOLD = 0.95
+
+    # Build postcode index from base rows
+    pc_index = defaultdict(list)  # postcode -> [(index, surname, forename, addr_str)]
     for i, row in enumerate(base_rows):
-        key = (row.get("Elector No. Prefix", "").strip(),
-               row.get("Elector No.", "").strip())
-        base_lookup[key] = i
+        pc = row.get("PostCode", "").strip()
+        surname = row.get("Surname", "").strip()
+        forename = row.get("Forename", "").strip()
+        addr_str = f"{row.get('Address1', '')} {row.get('Address2', '')}".strip()
+        if pc:
+            pc_index[pc].append((i, surname, forename, addr_str))
 
-    # Build ER lookup, handling duplicates
-    er_by_key = {}
-    er_key_counts = defaultdict(int)
-    for row in er_rows:
-        pdcode = row.get("PDCode", "").strip()
-        rollno = row.get("RollNo", "").strip()
-        key = (pdcode, rollno)
-        er_key_counts[key] += 1
-        if key not in er_by_key:
-            er_by_key[key] = row
+    # All-rows list for no-postcode fallback
+    all_base = [(i,
+                 row.get("Surname", "").strip(),
+                 row.get("Forename", "").strip(),
+                 f"{row.get('Address1', '')} {row.get('Address2', '')}".strip())
+                for i, row in enumerate(base_rows)]
 
-    # Log duplicates
-    for key, count in er_key_counts.items():
-        if count > 1:
-            report.er_duplicate_keys.append((key[0], key[1], count))
-            report.warnings.append(
-                f"Enriched register: duplicate key {key[0]}-{key[1]} ({count} occurrences, first used)")
+    # Track which base rows have been matched (for duplicate detection)
+    base_claimed = {}  # base_index -> (er_idx, er_name)
 
-    # Match
     matched = {}
-    for key, er_row in er_by_key.items():
-        if key in base_lookup:
-            matched[base_lookup[key]] = er_row
-            report.er_matched += 1
-        else:
-            name = f"{er_row.get('Forename', '')} {er_row.get('Surname', '')}".strip()
-            if not name:
-                name = f"{er_row.get('First Name', '')} {er_row.get('Last Name', '')}".strip()
-            report.er_unmatched.append((key[0], key[1], name or "(unknown)"))
+    report.er_total = len(er_rows)
 
-    report.er_total = len(er_by_key)
+    for er_idx, er_row in enumerate(er_rows):
+        # Extract name from ER row (try both column naming conventions)
+        er_surname = er_row.get("Surname", "").strip()
+        if not er_surname:
+            er_surname = er_row.get("Last Name", "").strip()
+        er_forename = er_row.get("Forename", "").strip()
+        if not er_forename:
+            er_forename = er_row.get("First Name", "").strip()
+        er_display_name = f"{er_forename} {er_surname}".strip() or "(unknown)"
+
+        # Extract and normalize postcode
+        er_postcode_raw = er_row.get("PostCode", "")
+        if not er_postcode_raw:
+            er_postcode_raw = er_row.get("Postcode", "")
+        if not er_postcode_raw:
+            er_postcode_raw = er_row.get("Post Code", "")
+        if not er_postcode_raw:
+            er_postcode_raw = er_row.get("POSTCODE", "")
+        er_postcode = er_postcode_raw.strip().upper()
+        # Normalize spacing
+        pc_norm, _ = normalize_postcode(er_postcode)
+        if pc_norm:
+            er_postcode = pc_norm
+
+        # Determine candidates
+        if er_postcode:
+            candidates = pc_index.get(er_postcode, [])
+            effective_threshold = threshold
+            if not candidates:
+                # Postcode exists but no base rows at that postcode: fallback
+                candidates = all_base
+                effective_threshold = NO_POSTCODE_THRESHOLD
+        else:
+            candidates = all_base
+            effective_threshold = NO_POSTCODE_THRESHOLD
+
+        if not candidates:
+            report.er_unmatched.append((er_postcode, er_display_name))
+            continue
+
+        # Score all candidates
+        scored = []
+        for base_idx, base_surname, base_forename, base_addr in candidates:
+            score = _surname_forename_similarity(
+                er_surname, er_forename, base_surname, base_forename)
+            scored.append((score, base_idx, f"{base_forename} {base_surname}".strip()))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_idx, best_name = scored[0]
+
+        # Check disambiguation
+        if len(scored) > 1:
+            second_score = scored[1][0]
+            if best_score >= effective_threshold and (best_score - second_score) < AMBIGUITY_MARGIN:
+                cands = [(scored[0][2], scored[0][0]), (scored[1][2], scored[1][0])]
+                report.er_ambiguous.append((er_display_name, er_postcode, cands))
+                continue
+
+        if best_score >= effective_threshold:
+            # Confident match — check for duplicate base claims
+            if best_idx in base_claimed:
+                prev_er_idx, prev_name = base_claimed[best_idx]
+                # Count how many ER rows matched this base
+                existing_count = 1
+                for name_pc_count in report.er_duplicate_keys:
+                    if name_pc_count[0] == prev_name:
+                        existing_count = name_pc_count[2]
+                        report.er_duplicate_keys.remove(name_pc_count)
+                        break
+                report.er_duplicate_keys.append(
+                    (er_display_name, er_postcode, existing_count + 1))
+                report.warnings.append(
+                    f"Enriched register: duplicate match \"{er_display_name}\" "
+                    f"({er_postcode}) -> base \"{best_name}\" "
+                    f"({existing_count + 1} occurrences, first used)")
+                # Keep the first match (don't overwrite)
+                continue
+            base_claimed[best_idx] = (er_idx, er_display_name)
+            matched[best_idx] = er_row
+            report.er_matched += 1
+            report.er_confident_matches.append(
+                (er_display_name, best_name, er_postcode, best_score))
+        elif best_score >= POSSIBLE_THRESHOLD:
+            report.er_possible.append(
+                (er_display_name, er_postcode, best_score, best_name))
+        else:
+            report.er_unmatched.append((er_postcode, er_display_name))
+
     return matched
 
 
@@ -505,15 +673,15 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
         elif not er_party and ce_party:
             party = ce_party
 
-        row[voted_key] = er_voted
-        row[party_key] = party
+        _set_field(row, voted_key, er_voted, row_key, report)
+        _set_field(row, party_key, party, row_key, report)
         # Derive GVI from party code
         if party in PARTY_TO_GVI:
-            row[gvi_key] = PARTY_TO_GVI[party]
+            _set_field(row, gvi_key, PARTY_TO_GVI[party], row_key, report)
         elif party and party not in ("", "Ind", "REF"):
-            row[gvi_key] = "5"  # Other
+            _set_field(row, gvi_key, "5", row_key, report)
         else:
-            row[gvi_key] = ""
+            _set_field(row, gvi_key, "", row_key, report)
 
     for election in future_elections:
         postal_key = f"{election} Postal Voter"
@@ -534,9 +702,9 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
             if visit_postal and visit_postal.upper() not in ("FALSE", ""):
                 postal = "v"
 
-        row[postal_key] = postal
-        row[party_key] = ""  # Uncertain
-        row[gvi_key] = ""    # Uncertain
+        _set_field(row, postal_key, postal, row_key, report)
+        _set_field(row, party_key, "", row_key, report)
+        _set_field(row, gvi_key, "", row_key, report)
 
 
 # ---------------------------------------------------------------------------
@@ -545,10 +713,14 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
 
 def add_extra_columns(row, er_match, ce_match, report):
     """Add non-TTW extra columns from both sources."""
+    prefix = row.get("Elector No. Prefix", "")
+    number = row.get("Elector No.", "")
+    row_key = f"{prefix}-{number}"
+
     if er_match:
         for col in EXTRA_COLS_REGISTER:
             val = er_match.get(col, "").strip()
-            row[col] = val
+            _set_field(row, col, val, row_key, report)
             # Track questions
             if col == "DNK" and val:
                 report.questions_data["DNK"] = True
@@ -560,14 +732,17 @@ def add_extra_columns(row, er_match, ce_match, report):
                 report.questions_data["1-5"] = True
     else:
         for col in EXTRA_COLS_REGISTER:
-            row[col] = ""
+            if col not in row:
+                row[col] = ""
 
     if ce_match:
         for col in EXTRA_COLS_CANVASSING:
-            row[col] = ce_match.get(col, "").strip()
+            val = ce_match.get(col, "").strip()
+            _set_field(row, col, val, row_key, report)
     else:
         for col in EXTRA_COLS_CANVASSING:
-            row[col] = ""
+            if col not in row:
+                row[col] = ""
 
 
 # ---------------------------------------------------------------------------
@@ -575,27 +750,42 @@ def add_extra_columns(row, er_match, ce_match, report):
 # ---------------------------------------------------------------------------
 
 def build_enrichment_headers(base_headers, historic_elections, future_elections,
-                             has_er, has_ce, strip_extra):
-    """Build output header list preserving base order, appending election + extra cols."""
+                             has_er, has_ce, strip_extra, report=None):
+    """Build output header list preserving base order, appending election + extra cols.
+
+    Deduplicates: skips columns that already exist in base_headers.
+    """
     headers = list(base_headers)
+    base_set = set(base_headers)
+
+    def _add_col(col):
+        if col in base_set:
+            if report:
+                report.existing_columns_updated.append(col)
+            return  # Skip duplicate
+        headers.append(col)
+        if report:
+            report.new_columns_created.append(col)
 
     # Election columns
     for election in historic_elections:
-        headers.append(f"{election} Green Voting Intention")
-        headers.append(f"{election} Party")
-        headers.append(f"{election} Voted")
+        _add_col(f"{election} Green Voting Intention")
+        _add_col(f"{election} Party")
+        _add_col(f"{election} Voted")
 
     for election in future_elections:
-        headers.append(f"{election} Green Voting Intention")
-        headers.append(f"{election} Party")
-        headers.append(f"{election} Postal Voter")
+        _add_col(f"{election} Green Voting Intention")
+        _add_col(f"{election} Party")
+        _add_col(f"{election} Postal Voter")
 
     # Extra columns (unless stripped)
     if not strip_extra:
         if has_er:
-            headers.extend(EXTRA_COLS_REGISTER)
+            for col in EXTRA_COLS_REGISTER:
+                _add_col(col)
         if has_ce:
-            headers.extend(EXTRA_COLS_CANVASSING)
+            for col in EXTRA_COLS_CANVASSING:
+                _add_col(col)
 
     return headers
 
@@ -623,10 +813,30 @@ def validate_base_is_ttw(headers):
 
 
 def validate_enriched_register(headers):
-    """Check enriched register has required columns."""
-    required = {"PDCode", "RollNo"}
+    """Check enriched register has required columns.
+
+    Requires PostCode (case-insensitive) plus at least one forename column
+    and at least one surname column.
+    """
     header_set = set(headers)
-    missing = required - header_set
+    header_lower = {h.lower(): h for h in headers}
+
+    # Check PostCode (case-insensitive variants)
+    has_postcode = any(h.lower().replace(" ", "") == "postcode" for h in headers)
+    if not has_postcode:
+        print("ERROR: Enriched register missing required column: PostCode",
+              file=sys.stderr)
+        print(f"Found columns: {headers}", file=sys.stderr)
+        sys.exit(1)
+
+    # Check name columns
+    has_forename = bool(header_set & {"Forename", "First Name"})
+    has_surname = bool(header_set & {"Surname", "Last Name"})
+    missing = []
+    if not has_forename:
+        missing.append("Forename or First Name")
+    if not has_surname:
+        missing.append("Surname or Last Name")
     if missing:
         print(f"ERROR: Enriched register missing required columns: {missing}",
               file=sys.stderr)
@@ -710,7 +920,8 @@ def main():
             print(f"Reading enriched register: {args.enriched_register}...")
         er_rows, _, er_headers = read_input(args.enriched_register)
         validate_enriched_register(er_headers)
-        er_match_map = match_enriched_register(base_rows, er_rows, report)
+        er_match_map = match_enriched_register(base_rows, er_rows,
+                                                args.match_threshold, report)
 
     # --- Read canvassing export ---
     ce_rows = None
@@ -751,6 +962,7 @@ def main():
         has_er=bool(args.enriched_register),
         has_ce=bool(args.canvassing_export),
         strip_extra=args.strip_extra,
+        report=report,
     )
 
     # --- Write output (unless dry-run) ---

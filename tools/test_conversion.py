@@ -266,8 +266,8 @@ class TestDeletion(unittest.TestCase):
         self.assertIn("PartialAddr", surnames)
 
     def test_output_row_count(self):
-        """50 input rows - 1 deletion = 49 output rows."""
-        self.assertEqual(len(self.rows), 49)
+        """62 input rows - 1 deletion = 61 output rows."""
+        self.assertEqual(len(self.rows), 61)
 
     def test_deletion_reason_in_report(self):
         """Deleted record should appear in human-readable section too."""
@@ -1183,6 +1183,100 @@ class TestAddressReformatting(unittest.TestCase):
             self.assertIn("Old", f, f"FIX missing Old: {f}")
             self.assertIn("New", f, f"FIX missing New: {f}")
             self.assertIn("Issue", f, f"FIX missing Issue: {f}")
+
+    # --- Dual-number auto-bracketing tests ---
+
+    def test_dual_number_comma_bracketed(self):
+        """Row 51: '506, 10 Evelina Gardens' -> '[506], 10 Evelina Gardens'."""
+        row = self._get_row("51")
+        self.assertEqual(row["Address1"], "[506], 10 Evelina Gardens")
+
+    def test_dual_number_space_bracketed(self):
+        """Row 52: '506 10 Evelina Gardens' -> '[506], 10 Evelina Gardens'."""
+        row = self._get_row("52")
+        self.assertEqual(row["Address1"], "[506], 10 Evelina Gardens")
+
+    def test_dual_number_split_bracketed(self):
+        """Row 53: Addr1='506', Addr2='10 Evelina Gardens' -> Addr1='[506]'."""
+        row = self._get_row("53")
+        self.assertEqual(row["Address1"], "[506]")
+        self.assertEqual(row["Address2"], "10 Evelina Gardens")
+
+    def test_single_number_not_bracketed(self):
+        """Row 54: '42 High Road' -> unchanged (second token not a digit)."""
+        row = self._get_row("54")
+        self.assertEqual(row["Address1"], "42 High Road")
+
+    def test_already_bracketed_not_changed(self):
+        """Row 55: '[506], 10 Evelina Gardens' -> unchanged."""
+        row = self._get_row("55")
+        self.assertEqual(row["Address1"], "[506], 10 Evelina Gardens")
+
+    def test_dual_number_occupied_addr2(self):
+        """Row 61: '506, 10 Evelina Gardens' with Addr2='London' -> bracket in Addr1, Addr2 unchanged."""
+        row = self._get_row("61")
+        self.assertEqual(row["Address1"], "[506], 10 Evelina Gardens")
+        self.assertEqual(row["Address2"], "London")
+
+    def test_bare_number_pair_not_bracketed(self):
+        """Row 62: '506 10' -> unchanged (only 2 tokens, no road word)."""
+        row = self._get_row("62")
+        self.assertEqual(row["Address1"], "506 10")
+
+    def test_dual_number_no_comma_warning(self):
+        """Bracketed results should NOT trigger 'NEEDS MANUAL FIX' comma warning."""
+        warnings = [parse_machine_line(l) for l in self.machine if l.startswith("WARNING")]
+        bracket_comma_warns = [w for _, w in warnings
+                               if "[506]" in w.get("Value", "")
+                               and "comma" in w.get("Issue", "").lower()]
+        self.assertEqual(len(bracket_comma_warns), 0,
+            "Bracketed dual-number addresses should not trigger comma warnings")
+
+    def test_dual_number_fix_logged(self):
+        """FIX entries should exist for dual-number auto-bracketing."""
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        bracket_fixes = [f for _, f in fixes if "dual-number auto-bracketed" in f.get("Issue", "")]
+        self.assertTrue(len(bracket_fixes) >= 1, "Dual-number bracketing should produce FIX entries")
+
+    # --- Zero-pad flat number tests ---
+
+    def test_flat_number_padded(self):
+        """Row 56: 'Flat 1' at 22 Evelina Gardens -> 'Flat 01' (max width 2 from Flat 12)."""
+        row = self._get_row("56")
+        self.assertEqual(row["Address1"], "Flat 01")
+
+    def test_flat_alphanumeric_padded(self):
+        """Row 57: 'Flat 3A' at 22 Evelina Gardens -> 'Flat 03A'."""
+        row = self._get_row("57")
+        self.assertEqual(row["Address1"], "Flat 03A")
+
+    def test_flat_max_width_unchanged(self):
+        """Row 58: 'Flat 12' at 22 Evelina Gardens -> unchanged (already max width)."""
+        row = self._get_row("58")
+        self.assertEqual(row["Address1"], "Flat 12")
+
+    def test_flat_alpha_not_padded(self):
+        """Row 59: 'Flat A' -> unchanged (alpha, not numeric)."""
+        row = self._get_row("59")
+        self.assertEqual(row["Address1"], "Flat A")
+
+    def test_flat_multi_word_not_padded(self):
+        """Row 60: 'Flat Ground Floor' -> unchanged (multi-word, no numeric ID)."""
+        row = self._get_row("60")
+        self.assertEqual(row["Address1"], "Flat Ground Floor")
+
+    def test_flat_padding_fix_logged(self):
+        """FIX entries should exist for zero-padded flat numbers."""
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        pad_fixes = [f for _, f in fixes if "zero-padded" in f.get("Issue", "")]
+        self.assertTrue(len(pad_fixes) >= 1, "Zero-padding should produce FIX entries")
+
+    def test_existing_flats_not_padded(self):
+        """Rows 27-29: 'Flat 1' at 88 Kilburn Lane should remain 'Flat 1' (max width=1)."""
+        for rollno in ("27", "28", "29"):
+            row = self._get_row(rollno)
+            self.assertEqual(row["Address1"], "Flat 1",
+                f"Row {rollno}: 'Flat 1' at 88 Kilburn Lane should not be padded (single-digit group)")
 
 
 # ---------------------------------------------------------------------------
