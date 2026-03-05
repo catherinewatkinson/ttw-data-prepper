@@ -93,7 +93,7 @@ class TestGoldenFileRegisterOnly(unittest.TestCase):
 
         cls.rc, cls.stdout, cls.stderr = run_clean(
             cls.golden_input, cls.tmp_output.name,
-            extra_args=["--suffix-mode", "from-column"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
 
@@ -160,9 +160,7 @@ class TestGoldenFileRegisterPlusElections(unittest.TestCase):
 
         cls.rc, cls.stdout, cls.stderr = run_clean(
             cls.golden_input, cls.tmp_output.name,
-            extra_args=[
-                "--suffix-mode", "from-column",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "2022", "2026",
                 "--election-types", "historic", "future",
             ],
@@ -217,7 +215,7 @@ class TestDeletion(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
@@ -266,8 +264,8 @@ class TestDeletion(unittest.TestCase):
         self.assertIn("PartialAddr", surnames)
 
     def test_output_row_count(self):
-        """62 input rows - 1 deletion = 61 output rows."""
-        self.assertEqual(len(self.rows), 61)
+        """64 input rows - 1 deletion = 63 output rows."""
+        self.assertEqual(len(self.rows), 63)
 
     def test_deletion_reason_in_report(self):
         """Deleted record should appear in human-readable section too."""
@@ -291,7 +289,7 @@ class TestFieldMapping(unittest.TestCase):
 
         cls.rc, _, _ = run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
@@ -365,93 +363,132 @@ class TestFieldMapping(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestSuffix(unittest.TestCase):
-    """Test suffix computation modes."""
+    """Test auto suffix computation (decimal RollNo detection)."""
 
-    def _run_with_suffix(self, mode, extra_args=None):
+    def test_integer_rollnos_get_suffix_zero(self):
+        """When all RollNos are integers and no Suffix column, every row gets suffix '0'."""
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
+        import csv as _csv
+        writer = _csv.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname",
+                         "ElectorForename", "RegisteredAddress1", "PostCode"])
+        writer.writerow(["AA1", "1", "Smith", "John", "1 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "2", "Jones", "Jane", "2 Road", "NW1 1AA"])
+        tmp_in.close()
         tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         tmp_out.close()
-        args = ["--suffix-mode", mode]
-        if extra_args:
-            args += extra_args
-        rc, _, stderr = run_clean(
-            TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
-            extra_args=args,
-        )
-        if rc != 0:
-            os.unlink(tmp_out.name)
-            return rc, None, stderr
-        _, rows = read_output_csv(tmp_out.name)
-        os.unlink(tmp_out.name)
-        return rc, rows, stderr
-
-    def test_suffix_zero(self):
-        """All suffixes should be '0' in zero mode."""
-        rc, rows, stderr = self._run_with_suffix("zero")
+        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name)
         self.assertEqual(rc, 0, stderr)
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_in.name)
+        os.unlink(tmp_out.name)
         for i, r in enumerate(rows):
             self.assertEqual(r["Elector No. Suffix"], "0",
                 f"Row {i+1}: suffix should be '0', got '{r['Elector No. Suffix']}'")
 
-    def test_suffix_per_address(self):
-        """Per-address suffixes should be sequential per unique address."""
+    def test_suffix_column_used_when_present(self):
+        """When input has a Suffix column and integer RollNos, use Suffix values as-is."""
         tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         tmp_out.close()
         rc, _, stderr = run_clean(
-            TEST_DATA / "edge_cases.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "per-address"],
+            TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
         )
         self.assertEqual(rc, 0, stderr)
         _, rows = read_output_csv(tmp_out.name)
         os.unlink(tmp_out.name)
-
-        # Find the three SameAddr rows (27, 28, 29)
-        same_addr = [r for r in rows if r["Surname"].startswith("SameAddr")]
-        self.assertEqual(len(same_addr), 3)
-        suffixes = [r["Elector No. Suffix"] for r in same_addr]
-        self.assertEqual(suffixes, ["1", "2", "3"],
-            f"Per-address suffixes should be 1,2,3 for same address, got {suffixes}")
-
-    def test_suffix_from_column(self):
-        """Suffix should be read from input Suffix column."""
-        rc, rows, stderr = self._run_with_suffix("from-column")
-        self.assertEqual(rc, 0, stderr)
-        # First row suffix should match the golden data
-        self.assertTrue(rows[0]["Elector No. Suffix"].isdigit(),
-            f"Suffix from column should be numeric, got '{rows[0]['Elector No. Suffix']}'")
-
-    def test_suffix_from_column_missing_errors(self):
-        """Missing Suffix column should produce a clear error."""
-        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
-        tmp_out.close()
-        rc, _, stderr = run_clean(
-            TEST_DATA / "edge_cases.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "from-column"],
-        )
-        os.unlink(tmp_out.name)
-        self.assertNotEqual(rc, 0, "Should fail when Suffix column is missing")
-        self.assertIn("Suffix", stderr)
+        # Golden data has Suffix column with non-zero values — should be preserved
+        self.assertTrue(any(r["Elector No. Suffix"] != "0" for r in rows),
+            "Suffix column values should be used when present")
 
     def test_full_elector_no_format(self):
         """Full Elector No. should be Prefix-No-Suffix."""
-        rc, rows, _ = self._run_with_suffix("zero")
-        self.assertEqual(rc, 0)
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
+        import csv as _csv
+        writer = _csv.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname",
+                         "ElectorForename", "RegisteredAddress1", "PostCode"])
+        writer.writerow(["AA1", "1", "Smith", "John", "1 Road", "NW1 1AA"])
+        tmp_in.close()
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name)
+        self.assertEqual(rc, 0, stderr)
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_in.name)
+        os.unlink(tmp_out.name)
         for i, r in enumerate(rows):
             expected = f"{r['Elector No. Prefix']}-{r['Elector No.']}-{r['Elector No. Suffix']}"
             self.assertEqual(r["Full Elector No."], expected,
                 f"Row {i+1}: expected '{expected}', got '{r['Full Elector No.']}'")
 
-    def test_full_elector_no_unique_abort(self):
-        """Duplicate Full Elector No. should abort (with suffix-mode=zero and duplicate RollNo)."""
+    def test_decimal_rollno_split(self):
+        """Decimal RollNos should be split into integer Elector No. + sequential suffix."""
+        # Create minimal CSV with decimal RollNos
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
+        import csv as _csv
+        writer = _csv.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname",
+                         "ElectorForename", "RegisteredAddress1", "PostCode"])
+        writer.writerow(["AA1", "10", "Base", "A", "1 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "10.5", "Half", "B", "1 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "10.75", "Three", "C", "1 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "20", "Solo", "D", "2 Road", "NW1 1AA"])
+        tmp_in.close()
+
         tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         tmp_out.close()
-        # edge_cases has rows 19 and 20 with same PDCode+RollNo, suffix=zero → same Full Elector No.
-        rc, _, stderr = run_clean(
-            TEST_DATA / "edge_cases.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "zero"],
-        )
+        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name)
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_in.name)
         os.unlink(tmp_out.name)
-        self.assertNotEqual(rc, 0, "Should abort on duplicate Full Elector No.")
-        self.assertIn("Duplicate Full Elector No.", stderr)
+
+        # RollNo 10 (frac=0) -> suffix 0, RollNo 10.5 (frac=0.5) -> suffix 1, RollNo 10.75 -> suffix 2
+        base = [r for r in rows if r["Surname"] == "Base"][0]
+        half = [r for r in rows if r["Surname"] == "Half"][0]
+        three = [r for r in rows if r["Surname"] == "Three"][0]
+        solo = [r for r in rows if r["Surname"] == "Solo"][0]
+
+        self.assertEqual(base["Elector No."], "10")
+        self.assertEqual(base["Elector No. Suffix"], "0")
+        self.assertEqual(half["Elector No."], "10")
+        self.assertEqual(half["Elector No. Suffix"], "1")
+        self.assertEqual(three["Elector No."], "10")
+        self.assertEqual(three["Elector No. Suffix"], "2")
+        self.assertEqual(solo["Elector No."], "20")
+        self.assertEqual(solo["Elector No. Suffix"], "0")
+
+        # Full Elector No. format
+        self.assertEqual(base["Full Elector No."], "AA1-10-0")
+        self.assertEqual(half["Full Elector No."], "AA1-10-1")
+        self.assertEqual(three["Full Elector No."], "AA1-10-2")
+        self.assertEqual(solo["Full Elector No."], "AA1-20-0")
+
+    def test_decimal_only_group(self):
+        """Group with only decimal RollNos (no whole number) should still work."""
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
+        import csv as _csv
+        writer = _csv.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname",
+                         "ElectorForename", "RegisteredAddress1", "PostCode"])
+        writer.writerow(["AA1", "5.5", "Alpha", "A", "1 Road", "NW1 1AA"])
+        writer.writerow(["AA1", "5.75", "Beta", "B", "1 Road", "NW1 1AA"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name)
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        _, rows = read_output_csv(tmp_out.name)
+        os.unlink(tmp_in.name)
+        os.unlink(tmp_out.name)
+
+        alpha = [r for r in rows if r["Surname"] == "Alpha"][0]
+        beta = [r for r in rows if r["Surname"] == "Beta"][0]
+        self.assertEqual(alpha["Elector No."], "5")
+        self.assertEqual(alpha["Elector No. Suffix"], "0")
+        self.assertEqual(beta["Elector No."], "5")
+        self.assertEqual(beta["Elector No. Suffix"], "1")
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +507,7 @@ class TestDateOfAttainment(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
@@ -528,7 +565,7 @@ class TestDateOfAttainment(unittest.TestCase):
         tmp_out.close()
         rc, _, _ = run_clean(
             TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "from-column"],
+            extra_args=[],
         )
         headers, _ = read_output_csv(tmp_out.name)
         os.unlink(tmp_out.name)
@@ -550,7 +587,7 @@ class TestColumnOrder(unittest.TestCase):
         tmp_out.close()
         rc, _, _ = run_clean(
             TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "from-column"],
+            extra_args=[],
         )
         headers, _ = read_output_csv(tmp_out.name)
         os.unlink(tmp_out.name)
@@ -571,9 +608,7 @@ class TestColumnOrder(unittest.TestCase):
         tmp_out.close()
         rc, _, _ = run_clean(
             TEST_DATA / "golden_input_register_plus_elections.csv", tmp_out.name,
-            extra_args=[
-                "--suffix-mode", "from-column",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "2022", "2026",
                 "--election-types", "historic", "future",
             ],
@@ -606,7 +641,7 @@ class TestEncoding(unittest.TestCase):
         cls.tmp_output.close()
         run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
         )
 
     @classmethod
@@ -719,9 +754,7 @@ class TestElectionData(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=[
-                "--suffix-mode", "per-address",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "2022", "2026",
                 "--election-types", "historic", "future",
             ],
@@ -799,7 +832,7 @@ class TestDuplicateDetection(unittest.TestCase):
 
         cls.rc, _, _ = run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
@@ -838,7 +871,7 @@ class TestRowCountWarning(unittest.TestCase):
 
         run_clean(
             TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "from-column", "--max-rows", "5"],
+            extra_args=["--max-rows", "5"],
             report_file=tmp_report.name,
         )
         report_text, _ = read_report(tmp_report.name)
@@ -865,7 +898,7 @@ class TestQAReport(unittest.TestCase):
 
         run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.report_text, cls.machine = read_report(cls.tmp_report.name)
@@ -928,7 +961,7 @@ class TestNameNormalization(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
@@ -1025,7 +1058,7 @@ class TestAddressReformatting(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "edge_cases.csv", cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
@@ -1301,7 +1334,7 @@ class TestRealisticMessyData(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             cls.input_file, cls.tmp_output.name,
-            extra_args=["--suffix-mode", "per-address"],
+            extra_args=[],
             report_file=cls.tmp_report.name,
         )
         cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
@@ -1543,11 +1576,12 @@ class TestRealisticMessyData(unittest.TestCase):
 
     # --- Decimal RollNo ---
 
-    def test_decimal_rollno_preserved(self):
-        """Decimal RollNo like 35.5 should pass through."""
+    def test_decimal_rollno_normalized(self):
+        """Decimal RollNo 35.5 should be split: Elector No.=35, suffix=1."""
         dos_santos = [r for r in self.rows if r["Surname"] == "Dos Santos"]
         self.assertEqual(len(dos_santos), 1)
-        self.assertEqual(dos_santos[0]["Elector No."], "35.5")
+        self.assertEqual(dos_santos[0]["Elector No."], "35")
+        self.assertEqual(dos_santos[0]["Elector No. Suffix"], "1")
 
     # --- UPRN ---
 
@@ -1648,7 +1682,7 @@ class TestRealisticMessyData(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestSuffixNormalize(unittest.TestCase):
-    """Test --suffix-mode normalize for fractional suffix renumbering."""
+    """Test decimal RollNo normalization with enriched data."""
 
     @classmethod
     def setUpClass(cls):
@@ -1659,9 +1693,7 @@ class TestSuffixNormalize(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "enriched_council_input.csv", cls.tmp_output.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024", "LE2026",
                 "--election-types", "historic", "future",
                 "--enriched-columns",
@@ -1679,60 +1711,54 @@ class TestSuffixNormalize(unittest.TestCase):
     def test_exit_code_zero(self):
         self.assertEqual(self.rc, 0, f"Failed:\n{self.stderr}")
 
-    def test_fractional_suffixes_renumbered(self):
-        """Fractional suffixes .5, .75, .875 should become blank, 1, 2."""
-        # KG2-10 group: .5, .75, .875 -> blank, 1, 2
+    def test_fractional_rollnos_renumbered(self):
+        """Decimal RollNo 10.5, 10.75, 10.875 -> Elector No.=10, suffixes 0, 1, 2."""
         kg2_10 = [r for r in self.rows if r["Elector No. Prefix"] == "KG2"
                   and r["Elector No."] == "10"]
         self.assertEqual(len(kg2_10), 3)
         suffixes = sorted(r["Elector No. Suffix"] for r in kg2_10)
-        self.assertEqual(suffixes, ["", "1", "2"])
+        self.assertEqual(suffixes, ["0", "1", "2"])
 
-    def test_primary_entry_stays_blank(self):
-        """The smallest fractional suffix becomes primary (blank suffix)."""
-        # KG1-3 group: .5, .75 -> primary is .5 (blank), .75 becomes 1
+    def test_primary_entry_gets_zero(self):
+        """The smallest fractional RollNo becomes primary (suffix 0)."""
         kg1_3 = [r for r in self.rows if r["Elector No. Prefix"] == "KG1"
                  and r["Elector No."] == "3"]
         self.assertEqual(len(kg1_3), 2)
-        # Patel Raj had .5 -> should be blank (primary)
+        # Patel Raj had RollNo 3.5 -> should be suffix 0 (smallest)
         raj = [r for r in kg1_3 if r["Forename"] == "Raj"]
         self.assertEqual(len(raj), 1)
-        self.assertEqual(raj[0]["Elector No. Suffix"], "")
+        self.assertEqual(raj[0]["Elector No. Suffix"], "0")
 
-    def test_single_row_no_suffix(self):
-        """Solo PDCode+RollNo should have blank suffix."""
-        # KG1-1 (Smith John) is alone
+    def test_single_row_suffix_zero(self):
+        """Solo PDCode+RollNo should have suffix '0'."""
         smith = [r for r in self.rows if r["Surname"] == "Smith" and r["Forename"] == "John"]
         self.assertEqual(len(smith), 1)
-        self.assertEqual(smith[0]["Elector No. Suffix"], "")
+        self.assertEqual(smith[0]["Elector No. Suffix"], "0")
 
     def test_full_elector_no_with_normalized_suffix(self):
-        """Full Elector No. format should be correct after normalization."""
+        """Full Elector No. format should be Prefix-No-Suffix."""
         for r in self.rows:
             prefix = r["Elector No. Prefix"]
             number = r["Elector No."]
             suffix = r["Elector No. Suffix"]
-            if suffix:
-                expected = f"{prefix}-{number}-{suffix}"
-            else:
-                expected = f"{prefix}-{number}"
+            expected = f"{prefix}-{number}-{suffix}"
             self.assertEqual(r["Full Elector No."], expected,
                 f"FEN mismatch: expected {expected}, got {r['Full Elector No.']}")
 
     def test_all_fractional_group(self):
-        """When ALL rows have fractional suffixes, smallest becomes primary."""
-        # KG2-10: all have .5, .75, .875 (no blank) -> .5 becomes primary
+        """When ALL rows have decimal RollNo, smallest fraction gets suffix 0."""
         kg2_10 = [r for r in self.rows if r["Elector No. Prefix"] == "KG2"
                   and r["Elector No."] == "10"]
-        # O'Brien-Murphy had .5 -> should be primary (blank)
+        # O'Brien-Murphy had RollNo 10.5 -> should be suffix 0 (smallest)
         sean = [r for r in kg2_10 if r["Surname"] == "O'Brien-Murphy"]
         self.assertEqual(len(sean), 1)
-        self.assertEqual(sean[0]["Elector No. Suffix"], "")
+        self.assertEqual(sean[0]["Elector No. Suffix"], "0")
 
     def test_suffix_renumber_logged(self):
         """Renumbering should appear as FIX entries in report."""
         fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
-        suffix_fixes = [f for _, f in fixes if "suffix normalized" in f.get("Issue", "")]
+        suffix_fixes = [f for _, f in fixes if "suffix normalized" in f.get("Issue", "")
+                        or "decimal RollNo" in f.get("Issue", "")]
         self.assertTrue(len(suffix_fixes) >= 1,
             "Suffix normalization should produce FIX entries")
 
@@ -1742,73 +1768,6 @@ class TestSuffixNormalize(unittest.TestCase):
         self.assertEqual(len(fens), len(set(fens)),
             f"Duplicate Full Elector No. values: {[f for f in fens if fens.count(f) > 1]}")
 
-    def test_suffix_normalize_missing_column_errors(self):
-        """Missing Suffix column should produce a clear error."""
-        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
-        tmp_out.close()
-        rc, _, stderr = run_clean(
-            TEST_DATA / "edge_cases.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "normalize"],
-        )
-        os.unlink(tmp_out.name)
-        self.assertNotEqual(rc, 0, "Should fail when Suffix column is missing")
-        self.assertIn("Suffix", stderr)
-
-    def test_mixed_suffix_formats(self):
-        """Handles '0.5' and '.5' consistently (both parse as 0.5)."""
-        # Create minimal CSV with both forms
-        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
-        import csv as _csv
-        writer = _csv.writer(tmp_in)
-        writer.writerow(["PDCode", "RollNo", "Suffix", "ElectorSurname",
-                         "ElectorForename", "RegisteredAddress1", "PostCode"])
-        writer.writerow(["AA1", "1", "0.5", "Alpha", "A", "10 Road", "NW1 1AA"])
-        writer.writerow(["AA1", "1", ".75", "Beta", "B", "10 Road", "NW1 1AA"])
-        tmp_in.close()
-
-        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
-        tmp_out.close()
-        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name,
-                                  extra_args=["--suffix-mode", "normalize"])
-        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
-        _, rows = read_output_csv(tmp_out.name)
-        os.unlink(tmp_in.name)
-        os.unlink(tmp_out.name)
-
-        # 0.5 < 0.75 -> primary (blank) and 1
-        alpha = [r for r in rows if r["Surname"] == "Alpha"]
-        beta = [r for r in rows if r["Surname"] == "Beta"]
-        self.assertEqual(alpha[0]["Elector No. Suffix"], "")
-        self.assertEqual(beta[0]["Elector No. Suffix"], "1")
-
-    def test_non_fractional_suffix_values(self):
-        """Non-numeric suffixes like 'A' handled gracefully (sorted after floats)."""
-        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w", newline="")
-        import csv as _csv
-        writer = _csv.writer(tmp_in)
-        writer.writerow(["PDCode", "RollNo", "Suffix", "ElectorSurname",
-                         "ElectorForename", "RegisteredAddress1", "PostCode"])
-        writer.writerow(["AA1", "1", ".5", "Float", "A", "10 Road", "NW1 1AA"])
-        writer.writerow(["AA1", "1", "A", "Alpha", "B", "10 Road", "NW1 1AA"])
-        writer.writerow(["AA1", "1", "B", "Bravo", "C", "10 Road", "NW1 1AA"])
-        tmp_in.close()
-
-        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
-        tmp_out.close()
-        rc, _, stderr = run_clean(tmp_in.name, tmp_out.name,
-                                  extra_args=["--suffix-mode", "normalize"])
-        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
-        _, rows = read_output_csv(tmp_out.name)
-        os.unlink(tmp_in.name)
-        os.unlink(tmp_out.name)
-
-        # .5 (float) first -> blank, then A, B (alpha) -> 1, 2
-        float_row = [r for r in rows if r["Surname"] == "Float"]
-        alpha_row = [r for r in rows if r["Surname"] == "Alpha"]
-        bravo_row = [r for r in rows if r["Surname"] == "Bravo"]
-        self.assertEqual(float_row[0]["Elector No. Suffix"], "")
-        self.assertEqual(alpha_row[0]["Elector No. Suffix"], "1")
-        self.assertEqual(bravo_row[0]["Elector No. Suffix"], "2")
 
 
 # ---------------------------------------------------------------------------
@@ -1827,9 +1786,7 @@ class TestEnrichedColumns(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "enriched_council_input.csv", cls.tmp_output.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024", "LE2026",
                 "--election-types", "historic", "future",
                 "--enriched-columns",
@@ -1946,9 +1903,7 @@ class TestEnrichedColumns(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "enriched_council_input.csv", tmp_out.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024", "GE2019",
                 "--election-types", "historic", "historic",
                 "--enriched-columns",
@@ -1964,9 +1919,7 @@ class TestEnrichedColumns(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "enriched_council_input.csv", tmp_out.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024",
                 "--election-types", "historic",
                 "--enriched-columns",
@@ -1982,9 +1935,7 @@ class TestEnrichedColumns(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "enriched_council_input.csv", tmp_out.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024", "LE2026", "BYE2026",
                 "--election-types", "historic", "future", "future",
                 "--enriched-columns",
@@ -2009,9 +1960,7 @@ class TestExtraColumns(unittest.TestCase):
 
         cls.rc, _, cls.stderr = run_clean(
             TEST_DATA / "enriched_council_input.csv", cls.tmp_output.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024", "LE2026",
                 "--election-types", "historic", "future",
                 "--enriched-columns",
@@ -2050,9 +1999,7 @@ class TestExtraColumns(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "enriched_council_input.csv", tmp_out.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024", "LE2026",
                 "--election-types", "historic", "future",
                 "--enriched-columns",
@@ -2087,7 +2034,7 @@ class TestBackwardsCompatibility(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "from-column"],
+            extra_args=[],
         )
         _, rows = read_output_csv(tmp_out.name)
         os.unlink(tmp_out.name)
@@ -2100,9 +2047,7 @@ class TestBackwardsCompatibility(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "golden_input_register_plus_elections.csv", tmp_out.name,
-            extra_args=[
-                "--suffix-mode", "from-column",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "2022", "LE2026",
                 "--election-types", "historic", "future",
                 "--enriched-columns",
@@ -2130,7 +2075,7 @@ class TestBackwardsCompatibility(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
-            extra_args=["--suffix-mode", "from-column"],
+            extra_args=[],
         )
         self.assertEqual(rc, 0, f"Failed:\n{stderr}")
         exp_h, exp_r = read_output_csv(TEST_DATA / "golden_expected_register_only.csv")
@@ -2145,9 +2090,7 @@ class TestBackwardsCompatibility(unittest.TestCase):
         tmp_out.close()
         rc, _, stderr = run_clean(
             TEST_DATA / "golden_input_register_plus_elections.csv", tmp_out.name,
-            extra_args=[
-                "--suffix-mode", "from-column",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "2022", "2026",
                 "--election-types", "historic", "future",
             ],
@@ -2187,9 +2130,7 @@ class TestEnrichedGoldenFile(unittest.TestCase):
 
         cls.rc, cls.stdout, cls.stderr = run_clean(
             cls.golden_input, cls.tmp_output.name,
-            extra_args=[
-                "--suffix-mode", "normalize",
-                "--mode", "register+elections",
+            extra_args=["--mode", "register+elections",
                 "--elections", "GE2024", "LE2026",
                 "--election-types", "historic", "future",
                 "--enriched-columns",

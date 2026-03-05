@@ -16,12 +16,12 @@ Examples:
 
     # Combined council+enrichment data (single file with GE24/Party/1-5 columns)
     # GE24 is historic (-> Voted), Party/1-5 are current (-> future election)
+    # Suffix is auto-detected: decimal RollNos are normalized to sequential suffixes
     python3 tools/clean_register.py combined.csv output.csv \\
         --mode register+elections \\
         --elections GE2024 LE2026 \\
         --election-types historic future \\
-        --enriched-columns \\
-        --suffix-mode normalize
+        --enriched-columns
 
     # Upload-ready (strip extra columns like Email, Phone, DNK, etc.)
     python3 tools/clean_register.py combined.csv upload.csv \\
@@ -29,7 +29,6 @@ Examples:
         --elections GE2024 LE2026 \\
         --election-types historic future \\
         --enriched-columns \\
-        --suffix-mode normalize \\
         --strip-extra
 """
 
@@ -147,7 +146,7 @@ class QAReport:
         self.input_file = ""
         self.output_file = ""
         self.mode = ""
-        self.suffix_mode = ""
+        self.suffix_mode = "auto"
         self.input_encoding = ""
         self.input_columns = []
         self.output_columns = []
@@ -205,15 +204,6 @@ class QAReport:
             "PostCode": "(+ spacing/case normalization)",
         }
 
-        # Suffix mode descriptions
-        suffix_descriptions = {
-            "blank": "Empty (suffix not applicable)",
-            "zero": "Generated: always '0'",
-            "per-address": "Generated: sequential per unique address",
-            "from-column": "Input: Suffix column",
-            "normalize": "Input: Suffix column (fractional values renumbered sequentially)",
-        }
-
         col_width = max(
             (len(f) for f in self.output_columns),
             default=25,
@@ -223,7 +213,7 @@ class QAReport:
 
         for field in self.output_columns:
             if field == "Elector No. Suffix":
-                source = suffix_descriptions.get(self.suffix_mode, "Unknown")
+                source = "Auto-detected: decimal RollNo -> sequential suffix, else '0'"
             elif field == "Full Elector No.":
                 source = "Computed: {Elector No. Prefix}-{Elector No.}-{Elector No. Suffix}"
             elif field in ttw_to_council:
@@ -350,38 +340,31 @@ def map_row(council_row):
 # Suffix computation
 # ---------------------------------------------------------------------------
 
-def compute_suffixes(rows, mode, council_rows=None, report=None):
-    """Compute Elector No. Suffix for each row based on mode."""
-    if mode == "blank":
-        for row in rows:
-            row["Elector No. Suffix"] = ""
+def compute_suffixes(rows, council_rows=None, report=None):
+    """Compute Elector No. Suffix for each row.
 
-    elif mode == "zero":
+    Auto-detects the appropriate method:
+    1. Any decimal RollNos (e.g. 3.5) → normalize groups containing decimals:
+       split into integer Elector No. + sequential suffix (0, 1, 2...).
+       Groups with only integer RollNos keep their existing Suffix column
+       values (or "0" if no Suffix column).
+    2. All integer RollNos + Suffix column with data → use Suffix values as-is
+    3. All integer RollNos + no Suffix column → assign "0" to all
+    """
+    has_decimals = any("." in row.get("Elector No.", "") for row in rows)
+    has_suffix_col = (council_rows is not None
+                      and any((cr.get("Suffix") or "").strip()
+                              for cr in council_rows))
+
+    if has_decimals:
+        _normalize_suffixes(rows, council_rows, report)
+    elif has_suffix_col:
+        for row, council_row in zip(rows, council_rows):
+            suffix = (council_row.get("Suffix") or "").strip()
+            row["Elector No. Suffix"] = suffix if suffix else ""
+    else:
         for row in rows:
             row["Elector No. Suffix"] = "0"
-
-    elif mode == "per-address":
-        addr_counter = {}
-        for row in rows:
-            key = (row.get("Address1", ""), row.get("Address2", ""), row.get("PostCode", ""))
-            addr_counter[key] = addr_counter.get(key, 0) + 1
-            row["Elector No. Suffix"] = str(addr_counter[key])
-
-    elif mode == "from-column":
-        if council_rows is None:
-            print("ERROR: --suffix-mode=from-column requires a 'Suffix' column in input.",
-                  file=sys.stderr)
-            sys.exit(1)
-        for row, council_row in zip(rows, council_rows):
-            suffix = council_row.get("Suffix", "").strip()
-            row["Elector No. Suffix"] = suffix if suffix else ""
-
-    elif mode == "normalize":
-        if council_rows is None:
-            print("ERROR: --suffix-mode=normalize requires a 'Suffix' column in input.",
-                  file=sys.stderr)
-            sys.exit(1)
-        _normalize_suffixes(rows, council_rows, report)
 
     # Build Full Elector No.
     for row in rows:
@@ -395,63 +378,73 @@ def compute_suffixes(rows, mode, council_rows=None, report=None):
 
 
 def _normalize_suffixes(rows, council_rows, report):
-    """Normalize fractional suffixes (.5, .75, .875) to sequential integers.
+    """Normalize decimal RollNo values to integer Elector No. + sequential suffix.
 
-    Groups rows by (PDCode, RollNo). Within each group:
-    - Single row: suffix stays blank
-    - Multiple rows: blank/zero first, then ascending by float value,
-      non-parseable suffixes after floats alphabetically.
-      Primary (first) gets blank suffix, rest get 1, 2, 3...
+    Only groups containing at least one decimal RollNo are renumbered.
+    Groups with only integer RollNos keep their existing Suffix column
+    values (or "0" if no Suffix column).
+
+    Within a renumbered group:
+    - Sorts by fractional value ascending
+    - Assigns suffix: "0" for primary, "1", "2", "3"... for rest
+    - Updates Elector No. to integer part
     """
-    # Group row indices by (prefix, number)
-    groups = defaultdict(list)
-    for i, (row, council_row) in enumerate(zip(rows, council_rows)):
-        prefix = row.get("Elector No. Prefix", "")
-        number = row.get("Elector No.", "")
-        suffix_raw = council_row.get("Suffix", "").strip()
-        groups[(prefix, number)].append((i, suffix_raw))
+    has_suffix_col = (council_rows is not None
+                      and any((cr.get("Suffix") or "").strip()
+                              for cr in council_rows))
 
-    for (prefix, number), members in groups.items():
-        if len(members) == 1:
-            # Single row: blank suffix
-            idx, old_suffix = members[0]
-            rows[idx]["Elector No. Suffix"] = ""
-            if old_suffix and report:
-                report.fixes.append((idx + 2, "Elector No. Suffix", old_suffix, "",
-                    "suffix normalized (single row in group)"))
+    # Parse each row and group by (prefix, integer_rollno)
+    groups = defaultdict(list)
+    for i, row in enumerate(rows):
+        prefix = row.get("Elector No. Prefix", "")
+        elector_no = row.get("Elector No.", "")
+
+        if "." in elector_no:
+            dot_pos = elector_no.index(".")
+            int_part = elector_no[:dot_pos]
+            try:
+                frac_val = float("0" + elector_no[dot_pos:])
+            except ValueError:
+                int_part = elector_no
+                frac_val = 0.0
+            is_decimal = True
+        else:
+            int_part = elector_no
+            frac_val = 0.0
+            is_decimal = False
+
+        groups[(prefix, int_part)].append((i, frac_val, elector_no, int_part, is_decimal))
+
+    for (prefix, int_part), members in groups.items():
+        # Only renumber groups that contain at least one decimal RollNo
+        has_decimal_member = any(m[4] for m in members)
+
+        if not has_decimal_member:
+            # Preserve existing Suffix column values, or assign "0"
+            for idx, _, _, _, _ in members:
+                if has_suffix_col:
+                    suffix = (council_rows[idx].get("Suffix") or "").strip()
+                    rows[idx]["Elector No. Suffix"] = suffix if suffix else ""
+                else:
+                    rows[idx]["Elector No. Suffix"] = "0"
             continue
 
-        # Multiple rows: sort and renumber
-        # Classify each suffix as float-parseable or not
-        float_members = []
-        non_float_members = []
-        for idx, suffix_raw in members:
-            if not suffix_raw:
-                float_members.append((0.0, idx, suffix_raw))
-            else:
-                try:
-                    val = float(suffix_raw)
-                    float_members.append((val, idx, suffix_raw))
-                except ValueError:
-                    non_float_members.append((suffix_raw, idx, suffix_raw))
+        # Sort by fractional value ascending and renumber
+        members.sort(key=lambda x: x[1])
 
-        # Sort: floats ascending, then non-floats alphabetically
-        float_members.sort(key=lambda x: x[0])
-        non_float_members.sort(key=lambda x: x[0])
-
-        sorted_members = [(idx, raw) for _, idx, raw in float_members] + \
-                         [(idx, raw) for _, idx, raw in non_float_members]
-
-        # Assign: first gets blank, rest get 1, 2, 3...
-        for pos, (idx, old_suffix) in enumerate(sorted_members):
-            if pos == 0:
-                new_suffix = ""
-            else:
-                new_suffix = str(pos)
-
+        for pos, (idx, frac_val, orig_elector_no, clean_no, _) in enumerate(members):
+            new_suffix = str(pos)
             rows[idx]["Elector No. Suffix"] = new_suffix
-            if old_suffix != new_suffix and report:
-                report.fixes.append((idx + 2, "Elector No. Suffix", old_suffix,
+
+            # Update Elector No. to integer part if it was decimal
+            if orig_elector_no != clean_no:
+                if report:
+                    report.fixes.append((idx + 2, "Elector No.", orig_elector_no,
+                        clean_no, "decimal RollNo normalized to integer"))
+                rows[idx]["Elector No."] = clean_no
+
+            if report and pos > 0:
+                report.fixes.append((idx + 2, "Elector No. Suffix", "",
                     new_suffix, "suffix normalized (fractional -> sequential)"))
 
 
@@ -1006,14 +999,7 @@ def main():
                         help="Election names (e.g. 2022 2026)")
     parser.add_argument("--election-types", nargs="*", default=[],
                         help="Election types: 'historic' or 'future' per election")
-    parser.add_argument("--suffix-mode",
-                        choices=["blank", "zero", "per-address", "from-column", "normalize"],
-                        default="blank",
-                        help="How to compute Elector No. Suffix (default: blank). "
-                             "blank=empty suffix, Full Elector No.=Prefix-No; "
-                             "zero=always '0'; per-address=sequential per address; "
-                             "from-column=read from input Suffix column; "
-                             "normalize=renumber fractional suffixes (.5, .75) sequentially")
+    # --suffix-mode removed: auto-detects decimal RollNo values
     parser.add_argument("--date-format", choices=["DMY", "YMD", "MDY"],
                         default="DMY", help="Input date format hint (default: DMY)")
     parser.add_argument("--report", default=None,
@@ -1060,7 +1046,7 @@ def main():
     report.input_file = args.input
     report.output_file = args.output
     report.mode = args.mode
-    report.suffix_mode = args.suffix_mode
+    report.suffix_mode = "auto"
     report_path = args.report or f"{args.output}.report.txt"
 
     # --- Step 1: Read input ---
@@ -1112,13 +1098,7 @@ def main():
     zero_pad_flat_numbers(mapped_rows, report)
 
     # --- Step 7: Compute suffix ---
-    suffix_needs_column = args.suffix_mode in ("from-column", "normalize")
-    suffix_council = council_rows if suffix_needs_column else None
-    if suffix_needs_column and "Suffix" not in header_set:
-        print(f"ERROR: --suffix-mode={args.suffix_mode} requires a 'Suffix' column in input.",
-              file=sys.stderr)
-        sys.exit(1)
-    compute_suffixes(mapped_rows, args.suffix_mode, suffix_council, report=report)
+    compute_suffixes(mapped_rows, council_rows, report=report)
 
     # --- Step 8: Normalize dates ---
     has_date_data = False

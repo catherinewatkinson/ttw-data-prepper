@@ -1,20 +1,20 @@
 ﻿Elector No. Prefix,Elector No.,Elector No. Suffix,Full Elector No.,Surname,Forename,Middle Names,Date of Attainment,Address1,Address2,Address3,Address4,Address5,Address6,PostCode,UPRN,GE2024 Voted,LE2026 Green Voting Intention,LE2026 Party,LE2026 Postal Voter,Email Address,Phone number,Comments,Issues,P/PB,DNK,New,1st round,Identifier,Address Identifier
-KG1,1,,KG1-1,Smith,John,,,42 Chamberlayne Road,London,,,,,NW10 3JU,,,1,G,,john@example.com,07700900001,,,,,,,ID001,ADDR001
-KG1,2,,KG1-2,Jones,Sarah,,,44 Chamberlayne Road,London,,,,,NW10 3JU,,,3,Lab,,sarah@example.com,07700900002,,None,,Do not knock,,,ID002,ADDR002
-KG1,3,,KG1-3,Patel,Raj,,,Ontario Point 10,Kilburn Lane,,,,,NW10 4AA,10070834521,v,2,Con,,,,,Housing,,,,busy,ID003,ADDR003
+KG1,1,0,KG1-1-0,Smith,John,,,42 Chamberlayne Road,London,,,,,NW10 3JU,,,1,G,,john@example.com,07700900001,,,,,,,ID001,ADDR001
+KG1,2,0,KG1-2-0,Jones,Sarah,,,44 Chamberlayne Road,London,,,,,NW10 3JU,,,3,Lab,,sarah@example.com,07700900002,,None,,Do not knock,,,ID002,ADDR002
+KG1,3,0,KG1-3-0,Patel,Raj,,,Ontario Point 10,Kilburn Lane,,,,,NW10 4AA,10070834521,v,2,Con,,,,,Housing,,,,busy,ID003,ADDR003
 KG1,3,1,KG1-3-1,Patel,Priya,,,Ontario Point 10,Kilburn Lane,,,,,NW10 4AA,10070834521,v,2,Con,,priya@example.com,07700900004,,,,,,Yes spoken to,ID004,ADDR003
-KG1,4,,KG1-4,Williams,Emma,,,Flat 5,88 Kilburn Lane,,,,,NW6 7AA,,,4,LD,,emma@example.com,,,,,,,,ID005,ADDR005
-KG2,10,,KG2-10,O'Brien-Murphy,Sean,,,South House,21 Chamberlayne Road,,,,,NW10 3JU,,v,1,G,,sean@example.com,07700900006,,,,,,No,ID006,ADDR006
+KG1,4,0,KG1-4-0,Williams,Emma,,,Flat 5,88 Kilburn Lane,,,,,NW6 7AA,,,4,LD,,emma@example.com,,,,,,,,ID005,ADDR005
+KG2,10,0,KG2-10-0,O'Brien-Murphy,Sean,,,South House,21 Chamberlayne Road,,,,,NW10 3JU,,v,1,G,,sean@example.com,07700900006,,,,,,No,ID006,ADDR006
 KG2,10,2,KG2-10-2,Martinez,Ana,,,South House,21 Chamberlayne Road,,,,,NW10 3JU,,,5,REF,,,,,Transport,,,,Not interested,ID007,ADDR006
 KG2,10,1,KG2-10-1,Kim,Ji-Yeon,,,South House,21 Chamberlayne Road,,,,,NW10 3JU,,v,,,,,,,,,,,Yes but not spoken to,ID008,ADDR006
-HP1,20,,HP1-20,Brown,Michael,,,15 High Road,,,,,,NW10 4UJ,,,,,,michael@example.com,07700900009,,,,,,,ID009,ADDR009
-HP1,21,,HP1-21,Garcia-Lopez,Maria,,15/03/2008,22 High Road,,,,,,NW10 4UJ,,v,,Oth,,maria@example.com,07700900010,Free parking,Potholes,,,,,ID010,ADDR010
-HP1,22,,HP1-22,Johnson,David,,,30 High Road,,,,,,NW10 4UJ,,v,1,G,,,,,Air quality,,,,busy,ID011,ADDR011
+HP1,20,0,HP1-20-0,Brown,Michael,,,15 High Road,,,,,,NW10 4UJ,,,,,,michael@example.com,07700900009,,,,,,,ID009,ADDR009
+HP1,21,0,HP1-21-0,Garcia-Lopez,Maria,,15/03/2008,22 High Road,,,,,,NW10 4UJ,,v,,Oth,,maria@example.com,07700900010,Free parking,Potholes,,,,,ID010,ADDR010
+HP1,22,0,HP1-22-0,Johnson,David,,,30 High Road,,,,,,NW10 4UJ,,v,1,G,,,,,Air quality,,,,busy,ID011,ADDR011
 HP1,22,1,HP1-22-1,Johnson,Mary,,,30 High Road,,,,,,NW10 4UJ,,,,,,,,,,,,,,ID012,ADDR011
 HP1,22,2,HP1-22-2,Johnson,Peter,,,30 High Road,,,,,,NW10 4UJ,,v,3,Lab,,peter.j@example.com,07700900013,,,,,,Yes spoken to,ID013,ADDR011
-HP2,30,,HP2-30,Lee,Grace,,,8 Park Avenue,,,,,,NW10 5BB,,,,,,,,,,,Do not knock,,,ID014,ADDR014
-HP2,31,,HP2-31,Chen,Wei,,,12 Park Avenue,,,,,,NW10 5BB,,,,G,,,,,,,,,,ID015,ADDR015
-HP2,32,,HP2-32,MacDONALD,Ewan,,15/03/2008,14 Park Avenue,,,,,,NW10 5BB,,v,1,G,,ewan@example.com,07700900016,,,,,,,ID016,ADDR016
-HP2,33,,HP2-33,De Vries,Anna,,,20 Park Avenue,,,,,,NW10 5BB,,v,3,Lab,,,07700900017,Nice person,,,,,,ID017,ADDR017
+HP2,30,0,HP2-30-0,Lee,Grace,,,8 Park Avenue,,,,,,NW10 5BB,,,,,,,,,,,Do not knock,,,ID014,ADDR014
+HP2,31,0,HP2-31-0,Chen,Wei,,,12 Park Avenue,,,,,,NW10 5BB,,,,G,,,,,,,,,,ID015,ADDR015
+HP2,32,0,HP2-32-0,MacDONALD,Ewan,,15/03/2008,14 Park Avenue,,,,,,NW10 5BB,,v,1,G,,ewan@example.com,07700900016,,,,,,,ID016,ADDR016
+HP2,33,0,HP2-33-0,De Vries,Anna,,,20 Park Avenue,,,,,,NW10 5BB,,v,3,Lab,,,07700900017,Nice person,,,,,,ID017,ADDR017
 HP2,33,1,HP2-33-1,De Vries,Pieter,,,20 Park Avenue,,,,,,NW10 5BB,,,,,,,,,,,,,,ID018,ADDR017
-HP2,34,,HP2-34,Taylor,Sophie,,,25 Park Avenue,,,,,,NW10 5BB,,,,SomeParty,,,07700900019,,,,,yes,,ID019,ADDR019
+HP2,34,0,HP2-34-0,Taylor,Sophie,,,25 Park Avenue,,,,,,NW10 5BB,,,,SomeParty,,,07700900019,,,,,yes,,ID019,ADDR019
