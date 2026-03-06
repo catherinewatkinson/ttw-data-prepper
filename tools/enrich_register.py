@@ -5,9 +5,16 @@ Usage:
     python3 tools/enrich_register.py BASE_TTW.csv OUTPUT.csv \\
         --enriched-register SPREADSHEET2.csv \\
         --canvassing-export SPREADSHEET1.csv \\
+        --canvassing-register NEW_CANVASSING.csv \\
         --historic-elections GE2024 \\
         --future-elections 2026 \\
         [--strip-extra] [--report PATH] [--match-threshold 0.8] [--dry-run] [--quiet]
+
+Sources:
+    --enriched-register   Register-format CSV with historic election data
+    --canvassing-export   TTW canvassing export CSV (profile_name, address fields)
+    --canvassing-register Register-format CSV with future election canvassing data
+                          (Party, 1-5, Comments). Requires --future-elections.
 """
 
 import argparse
@@ -41,6 +48,9 @@ EXTRA_COLS_REGISTER = [
 # Extra columns from canvassing export (non-TTW)
 EXTRA_COLS_CANVASSING = ["visit_issues", "visit_notes"]
 
+# Extra columns from canvassing register (non-TTW)
+EXTRA_COLS_CANVASSING_REGISTER = ["Comments"]
+
 
 # ---------------------------------------------------------------------------
 # QA Report for enrichment
@@ -65,6 +75,15 @@ class EnrichQAReport:
         self.er_ambiguous = []      # [(name, postcode, [(candidate_name, score)])]
         self.er_confident_matches = [] # [(er_name, base_name, postcode, score)]
         self.er_duplicate_keys = [] # [(name, postcode, count)]
+
+        # Canvassing register matching
+        self.canvassing_register_file = ""
+        self.cr_total = 0
+        self.cr_matched = 0
+        self.cr_unmatched = []       # [(postcode, name)]
+        self.cr_confident_matches = [] # [(cr_name, base_name, postcode, score)]
+        self.cr_possible = []        # [(name, postcode, score, candidate_name)]
+        self.cr_ambiguous = []       # [(name, postcode, [(candidate_name, score)])]
 
         # Column mapping and overwrite tracking
         self.column_mapping = []           # [(source_col, target_col)]
@@ -100,6 +119,8 @@ class EnrichQAReport:
             lines.append(f"Enriched register: {self.enriched_register_file}")
         if self.canvassing_export_file:
             lines.append(f"Canvassing export: {self.canvassing_export_file}")
+        if self.canvassing_register_file:
+            lines.append(f"Canvassing register: {self.canvassing_register_file}")
         lines.append("")
 
         # --- Summary ---
@@ -115,6 +136,9 @@ class EnrichQAReport:
                          f"{len(self.ce_ambiguous)} ambiguous, "
                          f"{len(self.ce_unmatched)} unmatched "
                          f"(of {self.ce_total} total)")
+        if self.canvassing_register_file:
+            cr_pct = (self.cr_matched / self.cr_total * 100) if self.cr_total else 0
+            lines.append(f"Canvassing register: {self.cr_matched}/{self.cr_total} matched ({cr_pct:.1f}%)")
         lines.append("")
 
         # --- Enriched Register Matching ---
@@ -170,6 +194,29 @@ class EnrichQAReport:
                 lines.append(f"Duplicate canvassing visits: {len(self.ce_duplicate_visits)}")
                 for key, count in self.ce_duplicate_visits:
                     lines.append(f"    Base row {key}: {count} visits (last used)")
+            lines.append("")
+
+        # --- Canvassing Register Matching ---
+        if self.canvassing_register_file:
+            lines.append("--- Canvassing Register Matching ---")
+            lines.append(f"Total rows: {self.cr_total}")
+            lines.append(f"Confident matches: {self.cr_matched}")
+            lines.append(f"Unmatched: {len(self.cr_unmatched)}")
+            lines.append(f"Possible matches: {len(self.cr_possible)}")
+            lines.append(f"Ambiguous matches: {len(self.cr_ambiguous)}")
+            if self.cr_unmatched:
+                lines.append("  Unmatched rows:")
+                for postcode, name in self.cr_unmatched:
+                    lines.append(f"    {name} ({postcode})")
+            if self.cr_possible:
+                lines.append("  Possible matches (for human review):")
+                for name, postcode, score, candidate in self.cr_possible:
+                    lines.append(f"    \"{name}\" ({postcode}) -> \"{candidate}\" (score={score:.3f})")
+            if self.cr_ambiguous:
+                lines.append("  Ambiguous matches:")
+                for name, postcode, candidates in self.cr_ambiguous:
+                    cand_str = ", ".join(f"\"{n}\" ({s:.3f})" for n, s in candidates)
+                    lines.append(f"    \"{name}\" ({postcode}): {cand_str}")
             lines.append("")
 
         # --- Data Conflicts ---
@@ -270,6 +317,14 @@ class EnrichQAReport:
                 lines.append(f"MATCH|Source=canvassing|Status=possible"
                              f"|Name={profile_name}|Score={score:.3f}"
                              f"|Candidate={candidate}")
+        if self.canvassing_register_file:
+            for postcode, name in self.cr_unmatched:
+                lines.append(f"MATCH|Source=canvassing_register|Status=unmatched"
+                             f"|PostCode={postcode}|Name={name}")
+            for cr_name, base_name, postcode, score in self.cr_confident_matches:
+                lines.append(f"MATCH|Source=canvassing_register|Status=confident"
+                             f"|CRName={cr_name}|BaseName={base_name}"
+                             f"|PostCode={postcode}|Score={score:.3f}")
         for row_key, field, old, new in self.overwrite_details:
             lines.append(f"OVERWRITE|Row={row_key}|Field={field}|Old={old}|New={new}")
         lines.append("### END MACHINE-READABLE SECTION ###")
@@ -449,9 +504,13 @@ def match_enriched_register(base_rows, er_rows, threshold, report):
         er_surname = er_row.get("Surname", "").strip()
         if not er_surname:
             er_surname = er_row.get("Last Name", "").strip()
+        if not er_surname:
+            er_surname = er_row.get("ElectorSurname", "").strip()
         er_forename = er_row.get("Forename", "").strip()
         if not er_forename:
             er_forename = er_row.get("First Name", "").strip()
+        if not er_forename:
+            er_forename = er_row.get("ElectorForename", "").strip()
         er_display_name = f"{er_forename} {er_surname}".strip() or "(unknown)"
 
         # Extract and normalize postcode
@@ -750,7 +809,7 @@ def add_extra_columns(row, er_match, ce_match, report):
 # ---------------------------------------------------------------------------
 
 def build_enrichment_headers(base_headers, historic_elections, future_elections,
-                             has_er, has_ce, strip_extra, report=None):
+                             has_er, has_ce, strip_extra, report=None, has_cr=False):
     """Build output header list preserving base order, appending election + extra cols.
 
     Deduplicates: skips columns that already exist in base_headers.
@@ -764,6 +823,7 @@ def build_enrichment_headers(base_headers, historic_elections, future_elections,
                 report.existing_columns_updated.append(col)
             return  # Skip duplicate
         headers.append(col)
+        base_set.add(col)
         if report:
             report.new_columns_created.append(col)
 
@@ -785,6 +845,9 @@ def build_enrichment_headers(base_headers, historic_elections, future_elections,
                 _add_col(col)
         if has_ce:
             for col in EXTRA_COLS_CANVASSING:
+                _add_col(col)
+        if has_cr:
+            for col in EXTRA_COLS_CANVASSING_REGISTER:
                 _add_col(col)
 
     return headers
@@ -856,6 +919,66 @@ def validate_canvassing_export(headers):
         sys.exit(1)
 
 
+def validate_canvassing_register(headers):
+    """Check canvassing register has required columns.
+
+    Accepts ElectorSurname/ElectorForename as valid name columns
+    (broader than validate_enriched_register).
+    """
+    # Check PostCode (case-insensitive variants)
+    has_postcode = any(h.lower().replace(" ", "") == "postcode" for h in headers)
+    if not has_postcode:
+        print("ERROR: Canvassing register missing required column: PostCode",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Check name columns (broader set than validate_enriched_register)
+    header_set = set(headers)
+    has_forename = bool(header_set & {"Forename", "First Name", "ElectorForename"})
+    has_surname = bool(header_set & {"Surname", "Last Name", "ElectorSurname"})
+    missing = []
+    if not has_forename:
+        missing.append("Forename, First Name, or ElectorForename")
+    if not has_surname:
+        missing.append("Surname, Last Name, or ElectorSurname")
+    if missing:
+        print(f"ERROR: Canvassing register missing required columns: {missing}",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Canvassing register column generation
+# ---------------------------------------------------------------------------
+
+def generate_canvassing_register_columns(row, cr_match, future_elections, report):
+    """Map canvassing register data to future election columns."""
+    row_key = f"{row.get('Elector No. Prefix', '')}-{row.get('Elector No.', '')}"
+
+    if not cr_match:
+        return
+
+    for election in future_elections:
+        # Party → {election} Party (mapped to TTW code)
+        party_raw = cr_match.get("Party", "").strip()
+        party = map_party_name(party_raw, report, "canvassing_register")
+        _set_field(row, f"{election} Party", party, row_key, report)
+
+        # 1-5 → {election} Green Voting Intention
+        gvi_raw = cr_match.get("1-5", "").strip()
+        if gvi_raw in {"1", "2", "3", "4", "5"}:
+            _set_field(row, f"{election} Green Voting Intention", gvi_raw,
+                       row_key, report)
+        elif gvi_raw:
+            report.warnings.append(
+                f"Canvassing register row {row_key}: invalid 1-5 value "
+                f"'{gvi_raw}', skipped")
+
+    # Comments → Comments extra column
+    comments = cr_match.get("Comments", "").strip()
+    _set_field(row, "Comments", comments, row_key, report)
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
@@ -870,6 +993,9 @@ def main():
                         help="Enriched register CSV (Spreadsheet 2)")
     parser.add_argument("--canvassing-export", default=None,
                         help="Canvassing export CSV (Spreadsheet 1)")
+    parser.add_argument("--canvassing-register", default=None,
+                        help="Canvassing register CSV (register-format with "
+                        "future election canvassing data: Party, 1-5, Comments)")
     parser.add_argument("--historic-elections", nargs="*", default=[],
                         help="Historic election names (e.g. GE2024)")
     parser.add_argument("--future-elections", nargs="*", default=[],
@@ -887,9 +1013,15 @@ def main():
     args = parser.parse_args()
 
     # Validate: at least one source required
-    if not args.enriched_register and not args.canvassing_export:
-        print("ERROR: At least one of --enriched-register or --canvassing-export is required.",
-              file=sys.stderr)
+    if not args.enriched_register and not args.canvassing_export and not args.canvassing_register:
+        print("ERROR: At least one of --enriched-register, --canvassing-export, "
+              "or --canvassing-register is required.", file=sys.stderr)
+        sys.exit(1)
+
+    # --canvassing-register requires --future-elections
+    if args.canvassing_register and not args.future_elections:
+        print("ERROR: --future-elections is required when using --canvassing-register "
+              "(canvassing data maps to future election columns).", file=sys.stderr)
         sys.exit(1)
 
     # Overwrite protection
@@ -935,6 +1067,29 @@ def main():
         ce_match_map = match_canvassing_export(
             base_rows, ce_rows, args.match_threshold, report)
 
+    # --- Read canvassing register ---
+    cr_match_map = {}
+    if args.canvassing_register:
+        report.canvassing_register_file = args.canvassing_register
+        if not args.quiet:
+            print(f"Reading canvassing register: {args.canvassing_register}...")
+        cr_rows, _, cr_headers = read_input(args.canvassing_register)
+        validate_canvassing_register(cr_headers)
+        # Use temporary report to avoid conflating ER and CR stats
+        temp_report = EnrichQAReport()
+        cr_match_map = match_enriched_register(
+            base_rows, cr_rows, args.match_threshold, temp_report)
+        # Copy stats from temp report to main report cr_* fields
+        report.cr_total = temp_report.er_total
+        report.cr_matched = temp_report.er_matched
+        report.cr_unmatched = temp_report.er_unmatched
+        report.cr_confident_matches = temp_report.er_confident_matches
+        report.cr_possible = temp_report.er_possible
+        report.cr_ambiguous = temp_report.er_ambiguous
+        # Merge warnings and unrecognized parties
+        report.warnings.extend(temp_report.warnings)
+        report.unrecognized_parties.extend(temp_report.unrecognized_parties)
+
     # --- Enrich each base row ---
     if not args.quiet:
         print("Enriching rows...")
@@ -948,6 +1103,12 @@ def main():
                                   args.historic_elections, args.future_elections,
                                   report)
         add_extra_columns(enriched, er_match, ce_match, report)
+
+        # Apply canvassing register data (after other enrichment, so CR overwrites)
+        cr_match = cr_match_map.get(i)
+        generate_canvassing_register_columns(
+            enriched, cr_match, args.future_elections, report)
+
         output_rows.append(enriched)
 
     # --- Row count assertion ---
@@ -963,6 +1124,7 @@ def main():
         has_ce=bool(args.canvassing_export),
         strip_extra=args.strip_extra,
         report=report,
+        has_cr=bool(args.canvassing_register),
     )
 
     # --- Write output (unless dry-run) ---
@@ -985,6 +1147,8 @@ def main():
                   f"{len(report.ce_possible)} possible, "
                   f"{len(report.ce_ambiguous)} ambiguous, "
                   f"{len(report.ce_unmatched)} unmatched")
+        if args.canvassing_register:
+            print(f"Canvassing register: {report.cr_matched}/{report.cr_total} matched")
         if args.dry_run:
             print("(dry-run: no output CSV written)")
         print(f"Report: {report_path}")

@@ -367,6 +367,14 @@ def compute_suffixes(rows, council_rows=None, report=None):
             row["Elector No. Suffix"] = "0"
 
     # Build Full Elector No.
+    _build_full_elector_no(rows)
+
+    # Dedup pass: if any Full Elector No. collisions remain, reassign suffixes
+    _dedup_full_elector_no(rows, report)
+
+
+def _build_full_elector_no(rows):
+    """Build Full Elector No. from prefix, number, and suffix."""
     for row in rows:
         prefix = row.get("Elector No. Prefix", "")
         number = row.get("Elector No.", "")
@@ -375,6 +383,39 @@ def compute_suffixes(rows, council_rows=None, report=None):
             row["Full Elector No."] = f"{prefix}-{number}-{suffix}"
         else:
             row["Full Elector No."] = f"{prefix}-{number}"
+
+
+def _dedup_full_elector_no(rows, report):
+    """Resolve duplicate Full Elector No. by reassigning suffixes sequentially."""
+    fen_groups = defaultdict(list)
+    for i, row in enumerate(rows):
+        fen = row.get("Full Elector No.", "")
+        fen_groups[fen].append(i)
+
+    for fen, indices in fen_groups.items():
+        if len(indices) < 2:
+            continue
+        # Reassign suffixes 0, 1, 2... for the collision group
+        for pos, idx in enumerate(indices):
+            row = rows[idx]
+            new_suffix = str(pos)
+            old_suffix = row.get("Elector No. Suffix", "")
+            if new_suffix != old_suffix:
+                row["Elector No. Suffix"] = new_suffix
+                if report:
+                    report.fixes.append((idx + 2, "Elector No. Suffix",
+                        old_suffix, new_suffix,
+                        f"auto-assigned to resolve duplicate {fen}"))
+        # Rebuild Full Elector No. for affected rows
+        for idx in indices:
+            row = rows[idx]
+            prefix = row.get("Elector No. Prefix", "")
+            number = row.get("Elector No.", "")
+            suffix = row.get("Elector No. Suffix", "")
+            if suffix:
+                row["Full Elector No."] = f"{prefix}-{number}-{suffix}"
+            else:
+                row["Full Elector No."] = f"{prefix}-{number}"
 
 
 def _normalize_suffixes(rows, council_rows, report):
@@ -1153,6 +1194,7 @@ def main():
     report.total_output = len(output_rows)
 
     # --- Step 13: Duplicate detection ---
+    # Only warn about shared (prefix, number) when suffixes don't make them unique
     key_counts = Counter(
         (row.get("Elector No. Prefix", ""), row.get("Elector No.", ""))
         for row in output_rows
@@ -1163,9 +1205,16 @@ def main():
                         if row.get("Elector No. Prefix") == prefix
                         and row.get("Elector No.") == number
                         and i not in delete_indices]
-            report.warnings.append((dup_rows[0], "Elector No.",
-                f"{prefix}-{number}",
-                f"Duplicate: appears {count} times (rows {dup_rows})"))
+            # Check if suffixes make them unique
+            dup_suffixes = [row.get("Elector No. Suffix", "")
+                           for row in output_rows
+                           if row.get("Elector No. Prefix") == prefix
+                           and row.get("Elector No.") == number]
+            if len(dup_suffixes) != len(set(dup_suffixes)):
+                # Suffixes don't resolve the collision — genuine duplicate
+                report.warnings.append((dup_rows[0], "Elector No.",
+                    f"{prefix}-{number}",
+                    f"Duplicate: appears {count} times (rows {dup_rows})"))
 
     # --- Step 14: Full Elector No. uniqueness ---
     fen_counts = Counter(row.get("Full Elector No.", "") for row in output_rows)

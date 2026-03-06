@@ -24,6 +24,7 @@ TEST_DATA = SCRIPT_DIR / "test_data"
 BASE_CSV = TEST_DATA / "enrich_base.csv"
 REGISTER_CSV = TEST_DATA / "enrich_register.csv"
 CANVASSING_CSV = TEST_DATA / "enrich_canvassing.csv"
+CANVASSING_REG_CSV = TEST_DATA / "enrich_canvassing_register.csv"
 EXPECTED_CSV = TEST_DATA / "enrich_expected.csv"
 
 
@@ -1061,6 +1062,176 @@ class TestDryRun(unittest.TestCase):
                          "Output CSV should not be written in dry-run mode")
         self.assertTrue(os.path.exists(self.report),
                         "Report should still be written in dry-run mode")
+
+
+# ---------------------------------------------------------------------------
+# TestCanvassingRegister
+# ---------------------------------------------------------------------------
+
+class TestCanvassingRegister(unittest.TestCase):
+    """Tests for --canvassing-register flag."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.output = os.path.join(self.tmpdir, "output.csv")
+        self.report = os.path.join(self.tmpdir, "report.txt")
+
+    def _run_cr_only(self, extra_args=None):
+        args = ["--canvassing-register", str(CANVASSING_REG_CSV),
+                "--future-elections", "2026",
+                "--report", self.report]
+        if extra_args:
+            args.extend(extra_args)
+        rc, out, err = run_enrich(BASE_CSV, self.output, args)
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        return read_output_csv(self.output)
+
+    def test_cr_maps_party_to_future(self):
+        """Party='GREEN PARTY' -> 2026 Party='G'."""
+        headers, rows = self._run_cr_only()
+        ka1_1 = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        self.assertEqual(ka1_1["2026 Party"], "G")
+
+    def test_cr_maps_gvi(self):
+        """1-5='1' -> 2026 Green Voting Intention='1'."""
+        headers, rows = self._run_cr_only()
+        # Fatima Ali has 1-5=1
+        kb1_2 = [r for r in rows if r["Full Elector No."] == "KB1-2-0"][0]
+        self.assertEqual(kb1_2["2026 Green Voting Intention"], "1")
+
+    def test_cr_maps_comments(self):
+        """Comments column copied to output."""
+        headers, rows = self._run_cr_only()
+        ka1_1 = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        self.assertEqual(ka1_1["Comments"], "Keen canvasser")
+
+    def test_cr_ignores_old_columns(self):
+        """GE24, PostalVoter?, DNK etc. values do NOT leak into election columns."""
+        headers, rows = self._run_cr_only()
+        # No historic elections requested, so no GE2024 columns
+        self.assertNotIn("GE2024 Voted", headers)
+        self.assertNotIn("GE2024 Party", headers)
+        # DNK, Email Address etc. should NOT appear as extra cols
+        self.assertNotIn("DNK", headers)
+        self.assertNotIn("Email Address", headers)
+        self.assertNotIn("New", headers)
+
+    def test_cr_overwrites_existing(self):
+        """Canvassing register data overwrites pre-existing future election values."""
+        # First enrich with ER (sets 2026 Party/GVI to blank via generate_election_columns)
+        # Then the CR should write its values
+        headers, rows = self._run_cr_only()
+        # KA1-3 Anna Van Der Berg: Party=CONSERVATIVES -> Con
+        ka1_3 = [r for r in rows if r["Full Elector No."] == "KA1-3-0"][0]
+        self.assertEqual(ka1_3["2026 Party"], "Con")
+
+    def test_cr_elector_name_matching(self):
+        """Matches on ElectorSurname/ElectorForename columns."""
+        # The canvassing register fixture uses ElectorForename/ElectorSurname
+        headers, rows = self._run_cr_only()
+        # Check multiple rows matched
+        ka1_4 = [r for r in rows if r["Full Elector No."] == "KA1-4-0"][0]
+        self.assertEqual(ka1_4["2026 Party"], "G")
+        # Check report for match count
+        text, _ = read_report(self.report)
+        self.assertIn("Canvassing Register Matching", text)
+
+    def test_cr_combined_with_er(self):
+        """Works alongside --enriched-register; CR overwrites ER for future cols."""
+        rc, out, err = run_enrich(
+            BASE_CSV, self.output,
+            ["--enriched-register", str(REGISTER_CSV),
+             "--canvassing-register", str(CANVASSING_REG_CSV),
+             "--historic-elections", "GE2024",
+             "--future-elections", "2026",
+             "--report", self.report])
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        headers, rows = read_output_csv(self.output)
+        # ER sets 2026 Party blank; CR sets it to mapped value
+        ka1_1 = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        self.assertEqual(ka1_1["2026 Party"], "G")
+        # Historic election data should still come from ER
+        self.assertEqual(ka1_1["GE2024 Party"], "G")
+        self.assertEqual(ka1_1["GE2024 Voted"], "v")
+        # Comments header must appear exactly once (regression: ER and CR both add it)
+        self.assertEqual(headers.count("Comments"), 1,
+                         f"Comments appears {headers.count('Comments')} times")
+
+    def test_cr_requires_future_elections(self):
+        """Error when --future-elections not provided with --canvassing-register."""
+        rc, out, err = run_enrich(
+            BASE_CSV, self.output,
+            ["--canvassing-register", str(CANVASSING_REG_CSV),
+             "--report", self.report])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("--future-elections is required", err)
+
+    def test_cr_invalid_gvi_warned(self):
+        """Invalid 1-5 values (e.g. '6', 'abc') logged as warning, not mapped."""
+        headers, rows = self._run_cr_only()
+        text, _ = read_report(self.report)
+        # James Thompson has 1-5=6, Wei Chen has 1-5=abc
+        self.assertIn("invalid 1-5 value", text.lower())
+
+    def test_cr_alone_headers_correct(self):
+        """Output has 2026 Party, 2026 GVI, Comments but NOT DNK, Email, etc."""
+        headers, rows = self._run_cr_only()
+        self.assertIn("2026 Party", headers)
+        self.assertIn("2026 Green Voting Intention", headers)
+        self.assertIn("Comments", headers)
+        # Should NOT have enriched register extra columns
+        self.assertNotIn("DNK", headers)
+        self.assertNotIn("Email Address", headers)
+        self.assertNotIn("Phone number", headers)
+        self.assertNotIn("Issues", headers)
+        self.assertNotIn("1st round", headers)
+        # Should NOT have canvassing export extra columns
+        self.assertNotIn("visit_issues", headers)
+        self.assertNotIn("visit_notes", headers)
+
+    def test_cr_unmatched_in_report(self):
+        """Unmatched CR rows (Ghost Voter, Nobody Here) appear in report."""
+        self._run_cr_only()
+        text, _ = read_report(self.report)
+        self.assertIn("Ghost Voter", text)
+        self.assertIn("Unmatched", text)
+
+    def test_cr_strip_extra_removes_comments(self):
+        """With --strip-extra, Comments column is removed."""
+        headers, rows = self._run_cr_only(["--strip-extra"])
+        self.assertNotIn("Comments", headers)
+        # Election columns still present
+        self.assertIn("2026 Party", headers)
+
+    def test_cr_multiple_future_elections(self):
+        """CR data maps to all future elections when multiple provided."""
+        args = ["--canvassing-register", str(CANVASSING_REG_CSV),
+                "--future-elections", "2026", "2027",
+                "--report", self.report]
+        rc, out, err = run_enrich(BASE_CSV, self.output, args)
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        headers, rows = read_output_csv(self.output)
+        ka1_1 = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        self.assertEqual(ka1_1["2026 Party"], "G")
+        self.assertEqual(ka1_1["2027 Party"], "G")
+        self.assertEqual(ka1_1["2026 Green Voting Intention"], "")
+        self.assertEqual(ka1_1["2027 Green Voting Intention"], "")
+        # Fatima Ali has 1-5=1
+        kb1_2 = [r for r in rows if r["Full Elector No."] == "KB1-2-0"][0]
+        self.assertEqual(kb1_2["2026 Green Voting Intention"], "1")
+        self.assertEqual(kb1_2["2027 Green Voting Intention"], "1")
+
+    def test_cr_empty_party_and_gvi(self):
+        """Rows with blank Party and blank 1-5 are no-ops for future election cols."""
+        headers, rows = self._run_cr_only()
+        # Priya Patel: Party=DID NOT VOTE (maps to blank), 1-5 blank
+        ka2_2 = [r for r in rows if r["Full Elector No."] == "KA2-2-0"][0]
+        self.assertEqual(ka2_2["2026 Party"], "")
+        self.assertEqual(ka2_2["2026 Green Voting Intention"], "")
+        # Gurpreet Singh: Party=REFUSED TO SAY (maps to blank), 1-5 blank
+        ka2_5 = [r for r in rows if r["Full Elector No."] == "KA2-5-0"][0]
+        self.assertEqual(ka2_5["2026 Party"], "")
+        self.assertEqual(ka2_5["2026 Green Voting Intention"], "")
 
 
 if __name__ == "__main__":

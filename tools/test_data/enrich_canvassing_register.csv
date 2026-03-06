@@ -1,0 +1,17 @@
+ElectorForename,ElectorSurname,PostCode,GE24,Party,PostalVoter?,P/PB,DNK,New,1st round,1-5,Comments
+Emily,Johnson,NW10 4QB,v,GREEN PARTY,,,,,,,Keen canvasser
+Kim,Kardashian,NW10 4QB,v,LABOUR,,v,,,,3,
+Anna,Van Der Berg,NW10 3JH,,CONSERVATIVES,v,,,,,2,Concerned about parking
+Sarah,O'Brien-Smythe,NW6 5UA,v,GREEN PARTY,,,,,,,Active member
+Li,Wu,NW6 6BX,v,LIBERAL_DEMOCRATS,,,,,,4,
+Arun,Patel,NW2 4HT,v,LABOUR,,,,,,,Housing concerns
+Priya,Patel,NW2 4HT,,DID NOT VOTE,,,,,,,,
+Rajan,Patel,NW2 4HT,v,GREEN,v,,,,,,Leaflet drop ok
+Chioma,Okonkwo,NW2 4SE,v,LABOUR,,,,,,3,
+Gurpreet,Singh,NW2 5SH,,REFUSED TO SAY,,,,,,,,
+James,Thompson,NW6 6NN,v,REFORM UK,,,,,,6,Invalid GVI
+Fatima,Ali,NW6 7EP,v,GREEN PARTY,,v,,,,1,Very supportive
+Wei,Chen,NW6 6AD,v,CONSERVATIVE,,,,,,abc,Bad GVI
+Michael,Brown,NW6 7HY,v,LABOUR,,,,,,,
+Ghost,Voter,ZZ9 9ZZ,v,GREEN,,,,,,1,Should not match
+Nobody,Here,ZZ1 1ZZ,,,,,,,,5,Also unmatched

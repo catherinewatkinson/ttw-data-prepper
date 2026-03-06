@@ -844,10 +844,11 @@ class TestDuplicateDetection(unittest.TestCase):
         os.unlink(cls.tmp_report.name)
 
     def test_duplicates_flagged(self):
-        """Duplicate PDCode+RollNo should generate WARNING."""
-        warnings = [parse_machine_line(l) for l in self.machine if l.startswith("WARNING")]
-        dup_warns = [w for _, w in warnings if "Duplicate" in w.get("Issue", "")]
-        self.assertTrue(len(dup_warns) >= 1, "Duplicates should be flagged")
+        """Duplicate decimal RollNo should be normalized to distinct suffixes."""
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        suffix_fixes = [f for _, f in fixes if "suffix normalized" in f.get("Issue", "")]
+        self.assertTrue(len(suffix_fixes) >= 1,
+            "Decimal duplicates should be resolved via suffix normalization")
 
     def test_duplicates_kept(self):
         """Both duplicate rows should be in output."""
@@ -1519,12 +1520,12 @@ class TestRealisticMessyData(unittest.TestCase):
     # --- Duplicates ---
 
     def test_duplicate_flagged_and_kept(self):
-        """Duplicate PDCode+RollNo should be flagged but both kept."""
+        """Duplicate decimal RollNo should be normalized and both kept."""
         bakare = [r for r in self.rows if r["Surname"] == "Bakare"]
         self.assertEqual(len(bakare), 2, "Both duplicate rows should be in output")
-        warnings = [parse_machine_line(l) for l in self.machine if l.startswith("WARNING")]
-        dup_warns = [w for _, w in warnings if "Duplicate" in w.get("Issue", "")]
-        self.assertTrue(len(dup_warns) >= 1)
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        suffix_fixes = [f for _, f in fixes if "suffix normalized" in f.get("Issue", "")]
+        self.assertTrue(len(suffix_fixes) >= 1)
 
     # --- SubHouse/House ---
 
