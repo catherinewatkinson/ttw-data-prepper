@@ -476,7 +476,7 @@ def check_matched_but_empty(report_data, output_rows, election_names):
 
 
 def check_voted_party_consistency(output_rows, election_names):
-    """If Voted="v" then Party should be non-empty (same election)."""
+    """If Voted="Y" then Party should be non-empty (same election)."""
     results = []
     inconsistent = []
 
@@ -487,16 +487,16 @@ def check_voted_party_consistency(output_rows, election_names):
             voted = row.get(voted_col, "").strip()
             party = row.get(party_col, "").strip()
 
-            if voted == "v" and not party:
+            if voted == "Y" and not party:
                 elector = row.get("Full Elector No.", "?")
                 inconsistent.append(
-                    f'{elector}: {voted_col}="v", {party_col}=""'
+                    f'{elector}: {voted_col}="Y", {party_col}=""'
                 )
 
     if inconsistent:
         results.append(CheckResult(
             Level.WARN, "voted_party_consistency",
-            f'{len(inconsistent)} row(s) have Voted="v" but Party '
+            f'{len(inconsistent)} row(s) have Voted="Y" but Party '
             f"is blank",
             details=inconsistent[:20],
         ))
@@ -642,6 +642,60 @@ def check_gvi_range(output_rows, election_names):
         results.append(CheckResult(
             Level.PASS, "gvi_range",
             "All Green Voting Intention values in range 1-5 or blank",
+        ))
+    return results
+
+
+def check_voted_values(output_rows, election_names):
+    """All Voted values must be 'Y' or blank (TTW spec)."""
+    results = []
+    invalid = []
+
+    for row in output_rows:
+        for election in election_names:
+            col = f"{election} Voted"
+            val = row.get(col, "").strip()
+            if val and val != "Y":
+                elector = row.get("Full Elector No.", "?")
+                invalid.append(f"{elector}: {col}='{val}'")
+
+    if invalid:
+        results.append(CheckResult(
+            Level.WARN, "voted_values",
+            f"{len(invalid)} Voted value(s) not in TTW format (expected 'Y' or blank)",
+            details=invalid[:20],
+        ))
+    else:
+        results.append(CheckResult(
+            Level.PASS, "voted_values",
+            "All Voted values are 'Y' or blank",
+        ))
+    return results
+
+
+def check_postal_voter_values(output_rows, election_names):
+    """All Postal Voter values must be 'Y' or blank (TTW spec)."""
+    results = []
+    invalid = []
+
+    for row in output_rows:
+        for election in election_names:
+            col = f"{election} Postal Voter"
+            val = row.get(col, "").strip()
+            if val and val != "Y":
+                elector = row.get("Full Elector No.", "?")
+                invalid.append(f"{elector}: {col}='{val}'")
+
+    if invalid:
+        results.append(CheckResult(
+            Level.WARN, "postal_voter_values",
+            f"{len(invalid)} Postal Voter value(s) not in TTW format (expected 'Y' or blank)",
+            details=invalid[:20],
+        ))
+    else:
+        results.append(CheckResult(
+            Level.PASS, "postal_voter_values",
+            "All Postal Voter values are 'Y' or blank",
         ))
     return results
 
@@ -885,6 +939,8 @@ def run_validation(output_path, base_path=None, report_path=None,
     results.extend(check_elector_no_consistency(output_rows))
     results.extend(check_party_codes(output_rows, election_names))
     results.extend(check_gvi_range(output_rows, election_names))
+    results.extend(check_voted_values(output_rows, election_names))
+    results.extend(check_postal_voter_values(output_rows, election_names))
 
     # INFO
     results.extend(compute_statistics(

@@ -1,0 +1,79 @@
+==================================================
+Electoral Register Conversion QA Report
+==================================================
+Date: 2026-03-09 16:27:11
+Input file: tools/test_data/dataset2_input.csv
+Output file: tools/test_data/dataset2_expected.csv
+Mode: register+elections
+Suffix mode: auto
+
+--- Summary ---
+Total input rows: 7
+Rows deleted (no address): 1
+Rows in output: 6
+Fixes applied: 7
+Warnings: 0
+
+--- Encoding ---
+Input encoding detected: utf-8-sig
+Output encoding: UTF-8-BOM
+
+--- Column Mapping ---
+Input columns: PDCode, RollNo, FranchiseMarker, DateOfAttainment, GE24, PostalVoter?, New, P/PB, DNK, 1st round, ElectorSurname, ElectorForename, Full name, RegisteredAddress1, RegisteredAddress2, RegisteredAddress3, RegisteredAddress4, RegisteredAddress5, RegisteredAddress6, PostCode, Party, 1-5, Comments, Email Address, Phone number, Issues
+
+  Output Field                     <- Source
+  -----------------------------    ------
+  Elector No. Prefix               <- PDCode
+  Elector No.                      <- RollNo
+  Elector No. Suffix               <- Auto-detected: decimal RollNo -> sequential suffix, else '0'
+  Full Elector No.                 <- Computed: {Elector No. Prefix}-{Elector No.}-{Elector No. Suffix}
+  Surname                          <- ElectorSurname (+ name case normalization)
+  Forename                         <- ElectorForename (+ name case normalization)
+  Middle Names                     <- ElectorMiddleName
+  Date of Attainment               <- DateOfAttainment (+ date normalization to DD/MM/YYYY)
+  Address1                         <- RegisteredAddress1 (+ SubHouse incorporation, address reformatting)
+  Address2                         <- RegisteredAddress2 (+ address reformatting)
+  Address3                         <- RegisteredAddress3
+  Address4                         <- RegisteredAddress4
+  Address5                         <- RegisteredAddress5
+  Address6                         <- RegisteredAddress6
+  PostCode                         <- PostCode (+ spacing/case normalization)
+  UPRN                             <- UPRN
+  GE2024 Voted                     <- GE2024 Voted
+  LE2026 Green Voting Intention    <- LE2026 Green Voting Intention
+  LE2026 Party                     <- LE2026 Party
+  LE2026 Postal Voter              <- LE2026 Postal Voter
+  Email Address                    <- Email Address
+  Phone number                     <- Phone number
+  Comments                         <- Comments
+  Issues                           <- Issues
+  P/PB                             <- P/PB
+  DNK                              <- DNK
+  New                              <- New
+  1st round                        <- 1st round
+
+Output columns: Elector No. Prefix, Elector No., Elector No. Suffix, Full Elector No., Surname, Forename, Middle Names, Date of Attainment, Address1, Address2, Address3, Address4, Address5, Address6, PostCode, UPRN, GE2024 Voted, LE2026 Green Voting Intention, LE2026 Party, LE2026 Postal Voter, Email Address, Phone number, Comments, Issues, P/PB, DNK, New, 1st round
+Discarded columns: FranchiseMarker, Full name
+
+--- Deleted Records ---
+  HP1-22 (Ghost): no address
+
+--- Fixes Applied ---
+  Row 4: Forename 'RAJ' -> 'Raj' -- name case normalized
+  Row 4: Surname 'PATEL' -> 'Patel' -- name case normalized
+  Row 4: Address1 '10 Ontario Point' -> 'Ontario Point 10' -- number before building name reordered
+  Row 5: Address1 '10 Ontario Point' -> 'Ontario Point 10' -- number before building name reordered
+  Row 4: Elector No. '3.5' -> '3' -- decimal RollNo normalized to integer
+  Row 5: Elector No. '3.75' -> '3' -- decimal RollNo normalized to integer
+  Row 5: Elector No. Suffix '' -> '1' -- suffix normalized (fractional -> sequential)
+
+### MACHINE-READABLE SECTION ###
+DELETED|PDCode=HP1|RollNo=22|Reason=no address
+FIX|Row=4|Field=Forename|Old=RAJ|New=Raj|Issue=name case normalized
+FIX|Row=4|Field=Surname|Old=PATEL|New=Patel|Issue=name case normalized
+FIX|Row=4|Field=Address1|Old=10 Ontario Point|New=Ontario Point 10|Issue=number before building name reordered
+FIX|Row=5|Field=Address1|Old=10 Ontario Point|New=Ontario Point 10|Issue=number before building name reordered
+FIX|Row=4|Field=Elector No.|Old=3.5|New=3|Issue=decimal RollNo normalized to integer
+FIX|Row=5|Field=Elector No.|Old=3.75|New=3|Issue=decimal RollNo normalized to integer
+FIX|Row=5|Field=Elector No. Suffix|Old=|New=1|Issue=suffix normalized (fractional -> sequential)
+### END MACHINE-READABLE SECTION ###

@@ -199,7 +199,7 @@ class TestFuzzyRegisterMatch(unittest.TestCase):
         ka1_1 = [r for r in rows if r["Elector No. Prefix"] == "KA1"
                  and r["Elector No."] == "1"][0]
         self.assertEqual(ka1_1["GE2024 Party"], "G")
-        self.assertEqual(ka1_1["GE2024 Voted"], "v")
+        self.assertEqual(ka1_1["GE2024 Voted"], "Y")
 
     def test_unmatched_rows_in_report(self):
         """2 unmatched enriched rows (Ghost Voter, Phantom Resident) appear in report."""
@@ -489,10 +489,10 @@ class TestElectionColumns(unittest.TestCase):
         return read_output_csv(self.output)
 
     def test_ge2024_voted_from_ge24(self):
-        """Any non-empty GE24 value -> GE2024 Voted = 'v'."""
+        """Any non-empty GE24 value -> GE2024 Voted = 'Y'."""
         headers, rows = self._run_register_only()
         ka1_1 = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
-        self.assertEqual(ka1_1["GE2024 Voted"], "v")
+        self.assertEqual(ka1_1["GE2024 Voted"], "Y")
         # KA1-3 has empty GE24 -> no voted
         ka1_3 = [r for r in rows if r["Full Elector No."] == "KA1-3-0"][0]
         self.assertEqual(ka1_3["GE2024 Voted"], "")
@@ -512,11 +512,11 @@ class TestElectionColumns(unittest.TestCase):
         self.assertEqual(ka1_2["GE2024 Green Voting Intention"], "3")
 
     def test_2026_postal_voter(self):
-        """PostalVoter? non-empty -> 2026 Postal Voter = 'v'."""
+        """PostalVoter? non-empty -> 2026 Postal Voter = 'Y'."""
         headers, rows = self._run_register_only()
         # KA1-3 has PostalVoter? = "v"
         ka1_3 = [r for r in rows if r["Full Elector No."] == "KA1-3-0"][0]
-        self.assertEqual(ka1_3["2026 Postal Voter"], "v")
+        self.assertEqual(ka1_3["2026 Postal Voter"], "Y")
 
     def test_2026_party_blank(self):
         """2026 Party and GVI left blank (uncertain)."""
@@ -1152,7 +1152,7 @@ class TestCanvassingRegister(unittest.TestCase):
         self.assertEqual(ka1_1["2026 Party"], "G")
         # Historic election data should still come from ER
         self.assertEqual(ka1_1["GE2024 Party"], "G")
-        self.assertEqual(ka1_1["GE2024 Voted"], "v")
+        self.assertEqual(ka1_1["GE2024 Voted"], "Y")
         # Comments header must appear exactly once (regression: ER and CR both add it)
         self.assertEqual(headers.count("Comments"), 1,
                          f"Comments appears {headers.count('Comments')} times")
@@ -1232,6 +1232,457 @@ class TestCanvassingRegister(unittest.TestCase):
         ka2_5 = [r for r in rows if r["Full Elector No."] == "KA2-5-0"][0]
         self.assertEqual(ka2_5["2026 Party"], "")
         self.assertEqual(ka2_5["2026 Green Voting Intention"], "")
+
+
+# ---------------------------------------------------------------------------
+# TestAddressNormalization
+# ---------------------------------------------------------------------------
+
+class TestAddressNormalization(unittest.TestCase):
+    """Tests for _normalize_address() and its effect on _address_similarity()."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Direct imports of private functions for unit testing
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("enrich_register", str(TOOL))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cls._normalize = staticmethod(mod._normalize_address)
+        cls._similarity = staticmethod(mod._address_similarity)
+        cls._match_ce = staticmethod(mod.match_canvassing_export)
+
+    # -- _normalize_address unit tests --
+
+    def test_bracket_removal(self):
+        """Square brackets removed: '[506], 10 Road' -> '10 506 Road'."""
+        result = self._normalize("[506], 10 Road")
+        self.assertNotIn("[", result)
+        self.assertNotIn("]", result)
+
+    def test_comma_removal(self):
+        """Commas removed."""
+        result = self._normalize("Flat 3, 30 Chamberlayne Road")
+        self.assertNotIn(",", result)
+
+    def test_leading_zero_strip_flat(self):
+        """'Flat 01' -> 'Flat 1'."""
+        result = self._normalize("Flat 01")
+        self.assertEqual(result, "1 Flat")  # sorted tokens
+
+    def test_leading_zero_strip_unit(self):
+        """'Unit 003' -> 'Unit 3'."""
+        result = self._normalize("Unit 003")
+        self.assertEqual(result, "3 Unit")  # sorted tokens
+
+    def test_bare_zero_preserved(self):
+        """Standalone '0' is not stripped."""
+        result = self._normalize("Block 0")
+        self.assertIn("0", result)
+
+    def test_whitespace_collapsing(self):
+        """Multiple spaces collapsed to single."""
+        result = self._normalize("Flat  1   Willesden   House")
+        self.assertNotIn("  ", result)
+
+    def test_token_sorting(self):
+        """Tokens sorted alphabetically: '1 Willesden House' -> '1 House Willesden'."""
+        self.assertEqual(self._normalize("1 Willesden House"),
+                         self._normalize("Willesden House 1"))
+
+    def test_empty_string(self):
+        """Empty string returns empty."""
+        self.assertEqual(self._normalize(""), "")
+
+    def test_none_handling(self):
+        """None returns empty."""
+        self.assertEqual(self._normalize(None), "")
+
+    def test_combined_transformations(self):
+        """Combined: '[506], 10  Road' -> brackets, comma, whitespace, sorted."""
+        result = self._normalize("[506], 10  Road")
+        self.assertEqual(result, "10 506 Road")
+
+    # -- _address_similarity score tests --
+
+    def test_sim_bracketed_vs_unbracketed(self):
+        """'[506] 10 Road' vs '506 10 Road' >= 0.95."""
+        score = self._similarity("[506] 10 Road", "506 10 Road")
+        self.assertGreaterEqual(score, 0.95)
+
+    def test_sim_zero_padded_vs_unpadded(self):
+        """'Flat 01' vs 'Flat 1' >= 0.95."""
+        score = self._similarity("Flat 01", "Flat 1")
+        self.assertGreaterEqual(score, 0.95)
+
+    def test_sim_word_reordered(self):
+        """'1 Willesden House' vs 'Willesden House 1' >= 0.95."""
+        score = self._similarity("1 Willesden House", "Willesden House 1")
+        self.assertGreaterEqual(score, 0.95)
+
+    def test_sim_identical_addresses(self):
+        """Identical addresses = 1.0."""
+        score = self._similarity("Flat 1 22 Willesden Lane", "Flat 1 22 Willesden Lane")
+        self.assertEqual(score, 1.0)
+
+    def test_sim_different_addresses_still_low(self):
+        """Completely different addresses score low."""
+        score = self._similarity("1 Oxford Street", "99 Baker Road")
+        self.assertLess(score, 0.5)
+
+    def test_sim_comma_split_address(self):
+        """'Flat 3, 30 Chamberlayne Road' vs 'Flat 3 30 Chamberlayne Road' >= 0.95."""
+        score = self._similarity("Flat 3, 30 Chamberlayne Road",
+                                 "Flat 3 30 Chamberlayne Road")
+        self.assertGreaterEqual(score, 0.95)
+
+    # -- Integration test: match_canvassing_export with reformatted base --
+
+    def test_integration_reformatted_base_matches(self):
+        """Reformatted base addresses still match original canvassing addresses."""
+        # Simulate base rows after clean_register reformatting
+        base_rows = [
+            {"Forename": "Emily", "Surname": "Johnson",
+             "Address1": "Flat 01", "Address2": "22 Willesden Lane",
+             "PostCode": "NW10 4QB"},
+            {"Forename": "Li", "Surname": "Wu",
+             "Address1": "Flat 03", "Address2": "88 Brondesbury Road",
+             "PostCode": "NW6 6BX"},
+        ]
+        # Canvassing export with original (unreformatted) addresses
+        ce_rows = [
+            {"profile_name": "Emily Johnson",
+             "address 1": "Flat 1", "address 2": "22 Willesden Lane",
+             "address 3": "", "address 4": "NW10 4QB",
+             "visit_previously_voted_for": "GREEN PARTY"},
+            {"profile_name": "Li Wu",
+             "address 1": "Flat 3", "address 2": "88 Brondesbury Road",
+             "address 3": "", "address 4": "NW6 6BX",
+             "visit_previously_voted_for": "LIB DEMS"},
+        ]
+
+        class FakeReport:
+            ce_total = 0
+            ce_confident = 0
+            ce_possible = []
+            ce_ambiguous = []
+            ce_unmatched = []
+            ce_duplicate_visits = []
+            ce_unmatched_rows = []
+            warnings = []
+
+        report = FakeReport()
+        result = self._match_ce(base_rows, ce_rows, 0.8, report)
+        # Both rows should match confidently
+        self.assertEqual(len(result), 2, f"Expected 2 matches, got {len(result)}")
+        self.assertEqual(report.ce_confident, 2)
+
+    def test_integration_reordered_building_number(self):
+        """'1 Willesden House' (base) vs 'Willesden House 1' (canvassing) matches."""
+        base_rows = [
+            {"Forename": "Jane", "Surname": "Doe",
+             "Address1": "Willesden House 1", "Address2": "",
+             "PostCode": "NW10 1AA"},
+        ]
+        ce_rows = [
+            {"profile_name": "Jane Doe",
+             "address 1": "1 Willesden House", "address 2": "",
+             "address 3": "", "address 4": "NW10 1AA",
+             "visit_previously_voted_for": "GREEN"},
+        ]
+
+        class FakeReport:
+            ce_total = 0
+            ce_confident = 0
+            ce_possible = []
+            ce_ambiguous = []
+            ce_unmatched = []
+            ce_duplicate_visits = []
+            ce_unmatched_rows = []
+            warnings = []
+
+        report = FakeReport()
+        result = self._match_ce(base_rows, ce_rows, 0.8, report)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(report.ce_confident, 1)
+
+
+# ---------------------------------------------------------------------------
+# TestUnmatchedCSV
+# ---------------------------------------------------------------------------
+
+class TestUnmatchedCSV(unittest.TestCase):
+    """Tests for unmatched canvassing export CSV output."""
+
+    CE_HEADERS = ["profile_name", "address 1", "address 2", "address 3",
+                  "address 4", "visit_previously_voted_for", "visit_notes"]
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.output = os.path.join(self.tmpdir, "output.csv")
+        self.report = os.path.join(self.tmpdir, "report.txt")
+        # Build a canvassing export with guaranteed unmatched / possible / ambiguous rows:
+        # Row 1: confident match (Emily Johnson)
+        # Row 2: totally unknown person at unknown postcode -> unmatched
+        # Row 3: right postcode, vaguely similar name -> possible (score 0.6-0.8)
+        # Row 4: "A Patel" at NW2 4HT -> ambiguous between Arun/Priya/Rajan Patel
+        self.ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "Spoke at door"},
+            {"profile_name": "Zzzz Nonexistent", "address 1": "999 Fake Road",
+             "address 2": "", "address 3": "",
+             "address 4": "XX99 9XX", "visit_previously_voted_for": "LABOUR",
+             "visit_notes": "Nobody here"},
+            {"profile_name": "M Brown", "address 1": "91 Kilburn High Road",
+             "address 2": "", "address 3": "",
+             "address 4": "NW6 7HY", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "Maybe Michael?"},
+            {"profile_name": "A Patel", "address 1": "7 Mapesbury Road",
+             "address 2": "", "address 3": "",
+             "address 4": "NW2 4HT", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "Which Patel?"},
+        ]
+        self.ce_path = write_temp_csv(self.ce_rows, self.CE_HEADERS)
+
+    def tearDown(self):
+        if os.path.exists(self.ce_path):
+            os.unlink(self.ce_path)
+
+    def _unmatched_path(self):
+        """Derive the unmatched CSV path from the output path."""
+        p = Path(self.output)
+        return str(p.parent / f"{p.stem}.unmatched.csv")
+
+    def _run_with_canvassing(self, ce_path=None, extra_args=None):
+        """Run enrichment with canvassing export."""
+        args = [
+            "--canvassing-export", ce_path or self.ce_path,
+            "--historic-elections", "GE2024",
+            "--future-elections", "2026",
+        ]
+        if extra_args:
+            args.extend(extra_args)
+        return run_enrich(BASE_CSV, self.output, args, report_file=self.report)
+
+    def _read_unmatched_csv(self):
+        """Read the unmatched CSV and return (headers, rows)."""
+        path = self._unmatched_path()
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames
+            rows = list(reader)
+        return headers, rows
+
+    def test_unmatched_csv_written(self):
+        """Unmatched CSV exists with correct helper columns in header."""
+        rc, _, err = self._run_with_canvassing()
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        path = self._unmatched_path()
+        self.assertTrue(os.path.exists(path), f"Expected {path} to exist")
+        headers, rows = self._read_unmatched_csv()
+        # Helper columns should be first
+        expected_helpers = [
+            "Match Category", "Match Score",
+            "Best Candidate Elector No.", "Best Candidate Name",
+            "Best Candidate Address", "Best Candidate PostCode",
+            "2nd Candidate Elector No.", "2nd Candidate Name",
+            "2nd Candidate Score",
+        ]
+        self.assertEqual(headers[:len(expected_helpers)], expected_helpers)
+        self.assertGreater(len(rows), 0, "Expected at least one unmatched row")
+
+    def test_unmatched_csv_categories(self):
+        """Match Category values are limited to expected set."""
+        rc, _, err = self._run_with_canvassing()
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        _, rows = self._read_unmatched_csv()
+        valid_categories = {"unmatched", "possible", "ambiguous"}
+        for row in rows:
+            self.assertIn(row["Match Category"], valid_categories,
+                          f"Unexpected category: {row['Match Category']}")
+
+    def test_unmatched_csv_candidate_info(self):
+        """Rows with a score have Best Candidate columns populated."""
+        rc, _, err = self._run_with_canvassing()
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        _, rows = self._read_unmatched_csv()
+        for row in rows:
+            if row["Match Score"]:
+                self.assertNotEqual(row["Best Candidate Elector No."], "",
+                                    f"Missing elector no for {row['profile_name']}")
+                self.assertNotEqual(row["Best Candidate Name"], "",
+                                    f"Missing name for {row['profile_name']}")
+
+    def test_unmatched_csv_ambiguous_second_candidate(self):
+        """Ambiguous rows have 2nd candidate columns populated."""
+        rc, _, err = self._run_with_canvassing()
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        _, rows = self._read_unmatched_csv()
+        ambiguous = [r for r in rows if r["Match Category"] == "ambiguous"]
+        for row in ambiguous:
+            self.assertNotEqual(row["2nd Candidate Elector No."], "",
+                                f"Missing 2nd elector no for {row['profile_name']}")
+            self.assertNotEqual(row["2nd Candidate Name"], "",
+                                f"Missing 2nd name for {row['profile_name']}")
+            self.assertNotEqual(row["2nd Candidate Score"], "",
+                                f"Missing 2nd score for {row['profile_name']}")
+
+    def test_unmatched_csv_all_ds3_columns(self):
+        """All original canvassing export columns present in unmatched CSV."""
+        rc, _, err = self._run_with_canvassing()
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        headers, rows = self._read_unmatched_csv()
+        for col in self.CE_HEADERS:
+            self.assertIn(col, headers,
+                          f"Original DS3 column '{col}' missing from unmatched CSV")
+        # Check values are preserved
+        for row in rows:
+            self.assertNotEqual(row.get("profile_name", ""), "",
+                                "profile_name should not be empty")
+
+    def test_unmatched_csv_not_written_when_all_match(self):
+        """No unmatched CSV when all canvassing rows match."""
+        ce_rows = [{"profile_name": "Emily Johnson", "address 1": "Flat 1",
+                     "address 2": "22 Willesden Lane", "address 3": "",
+                     "address 4": "NW10 4QB",
+                     "visit_previously_voted_for": "GREEN",
+                     "visit_notes": "test"}]
+        ce_path = write_temp_csv(ce_rows, self.CE_HEADERS)
+        try:
+            rc, _, err = self._run_with_canvassing(ce_path=ce_path)
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            self.assertFalse(os.path.exists(self._unmatched_path()),
+                             "Unmatched CSV should not exist when all rows match")
+        finally:
+            os.unlink(ce_path)
+
+    def test_unmatched_csv_not_written_dry_run(self):
+        """--dry-run suppresses unmatched CSV."""
+        rc, _, err = self._run_with_canvassing(extra_args=["--dry-run"])
+        self.assertEqual(rc, 0, f"Script failed: {err}")
+        self.assertFalse(os.path.exists(self._unmatched_path()),
+                         "Unmatched CSV should not exist on --dry-run")
+
+
+# ---------------------------------------------------------------------------
+# TestCanvassingExportDNK
+# ---------------------------------------------------------------------------
+
+class TestCanvassingExportDNK(unittest.TestCase):
+    """Tests for optional DNK column in canvassing export (DS3)."""
+
+    CE_HEADERS = ["profile_name", "address 1", "address 2", "address 3",
+                  "address 4", "visit_previously_voted_for", "visit_notes"]
+
+    CE_HEADERS_DNK = CE_HEADERS + ["DNK"]
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.output = os.path.join(self.tmpdir, "output.csv")
+        self.report = os.path.join(self.tmpdir, "report.txt")
+
+    def _run(self, ce_path, extra_args=None):
+        args = [
+            "--canvassing-export", ce_path,
+            "--historic-elections", "GE2024",
+            "--report", self.report,
+        ]
+        if extra_args:
+            args.extend(extra_args)
+        return run_enrich(BASE_CSV, self.output, args)
+
+    def _run_with_er(self, ce_path, extra_args=None):
+        args = [
+            "--enriched-register", str(REGISTER_CSV),
+            "--canvassing-export", ce_path,
+            "--historic-elections", "GE2024",
+            "--report", self.report,
+        ]
+        if extra_args:
+            args.extend(extra_args)
+        return run_enrich(BASE_CSV, self.output, args)
+
+    def test_ce_dnk_merged(self):
+        """CE with DNK column → output has DNK with correct values."""
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "", "DNK": "Y"},
+            {"profile_name": "Kim Kardashian", "address 1": "33 Willesden Lane",
+             "address 2": "", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "",
+             "visit_notes": "", "DNK": ""},
+        ]
+        ce_path = write_temp_csv(ce_rows, self.CE_HEADERS_DNK)
+        try:
+            rc, _, err = self._run(ce_path)
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            self.assertIn("DNK", headers)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            self.assertEqual(emily["DNK"], "Y")
+            kim = [r for r in rows if r["Full Elector No."] == "KA1-2-0"][0]
+            self.assertEqual(kim["DNK"], "")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_dnk_overwrites_er(self):
+        """Both ER and CE have DNK for same person → CE value wins."""
+        # ER register has DNK for row KA1-3 (Anna Van Der Berg) = empty
+        # but CE sets it to Y
+        ce_rows = [
+            {"profile_name": "Anna Van Der Berg", "address 1": "45 Chamberlayne Road",
+             "address 2": "", "address 3": "",
+             "address 4": "NW10 3JH", "visit_previously_voted_for": "",
+             "visit_notes": "", "DNK": "Y"},
+        ]
+        ce_path = write_temp_csv(ce_rows, self.CE_HEADERS_DNK)
+        try:
+            rc, _, err = self._run_with_er(ce_path)
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            self.assertIn("DNK", headers)
+            anna = [r for r in rows if r["Full Elector No."] == "KA1-3-0"][0]
+            self.assertEqual(anna["DNK"], "Y")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_without_dnk_column(self):
+        """CE without DNK column → DNK does NOT appear in output headers (CE-only)."""
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": ""},
+        ]
+        ce_path = write_temp_csv(ce_rows, self.CE_HEADERS)
+        try:
+            rc, _, err = self._run(ce_path)
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, _ = read_output_csv(self.output)
+            self.assertNotIn("DNK", headers)
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_dnk_stripped(self):
+        """--strip-extra removes DNK column from output."""
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "", "DNK": "Y"},
+        ]
+        ce_path = write_temp_csv(ce_rows, self.CE_HEADERS_DNK)
+        try:
+            rc, _, err = self._run(ce_path, extra_args=["--strip-extra"])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, _ = read_output_csv(self.output)
+            self.assertNotIn("DNK", headers)
+        finally:
+            os.unlink(ce_path)
 
 
 if __name__ == "__main__":

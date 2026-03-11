@@ -152,7 +152,7 @@ class TestFAILChecks(unittest.TestCase):
     def test_modified_base_column(self):
         """FAIL when protected columns (Surname, Address) are changed."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
             {"GE2024 Party": "Lab"},
             {},
@@ -260,7 +260,7 @@ class TestFAILChecks(unittest.TestCase):
     def test_missing_bom(self):
         """FAIL when output file has no UTF-8 BOM."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
             {"GE2024 Party": "Lab"},
             {},
@@ -284,7 +284,7 @@ class TestFAILChecks(unittest.TestCase):
     def test_lf_only_line_endings(self):
         """FAIL when output has LF-only line endings (with BOM present)."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
             {"GE2024 Party": "Lab"},
             {},
@@ -334,7 +334,7 @@ class TestWARNChecks(unittest.TestCase):
     def test_unknown_party_code(self):
         """WARN when Party value is not in VALID_PARTY_CODES."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "INVALID_PARTY", "GE2024 Voted": "v",
+            {"GE2024 Party": "INVALID_PARTY", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
             {},
             {},
@@ -356,9 +356,9 @@ class TestWARNChecks(unittest.TestCase):
     def test_valid_L_code_no_warn(self):
         """No WARN for 'L' party code (valid alternate Labour code)."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "L", "GE2024 Voted": "v",
+            {"GE2024 Party": "L", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "3"},
-            {"GE2024 Party": "Lab", "GE2024 Voted": "v",
+            {"GE2024 Party": "Lab", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "3"},
             {},
         ])
@@ -382,7 +382,7 @@ class TestWARNChecks(unittest.TestCase):
         """WARN when GVI value is outside 1-5 range."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
             {"GE2024 Green Voting Intention": "9",
-             "GE2024 Party": "G", "GE2024 Voted": "v"},
+             "GE2024 Party": "G", "GE2024 Voted": "Y"},
             {},
             {},
         ])
@@ -402,7 +402,7 @@ class TestWARNChecks(unittest.TestCase):
     def test_voted_without_party(self):
         """WARN when Voted='v' but Party is blank."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Voted": "v", "GE2024 Party": "",
+            {"GE2024 Voted": "Y", "GE2024 Party": "",
              "GE2024 Green Voting Intention": ""},
             {},
             {},
@@ -439,7 +439,7 @@ class TestWARNChecks(unittest.TestCase):
     def test_elector_no_inconsistent(self):
         """WARN when Full Elector No. doesn't match components."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
             {},
             {},
@@ -687,7 +687,7 @@ class TestReportParsing(unittest.TestCase):
         ])
 
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
             {},
             {},
@@ -721,9 +721,9 @@ class TestReportParsing(unittest.TestCase):
                                      encoding="utf-8")
 
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
-            {"GE2024 Party": "Lab", "GE2024 Voted": "v",
+            {"GE2024 Party": "Lab", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "3"},
             {},
         ])
@@ -764,9 +764,9 @@ class TestCLI(unittest.TestCase):
     def test_quiet_suppresses_stdout(self):
         """--quiet suppresses stdout output."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
-            {"GE2024 Party": "Lab", "GE2024 Voted": "v",
+            {"GE2024 Party": "Lab", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "3"},
             {},
         ])
@@ -809,7 +809,7 @@ class TestCLI(unittest.TestCase):
     def test_elections_override(self):
         """--elections overrides auto-discovery."""
         output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
-            {"GE2024 Party": "G", "GE2024 Voted": "v",
+            {"GE2024 Party": "G", "GE2024 Voted": "Y",
              "GE2024 Green Voting Intention": "1"},
             {},
             {},

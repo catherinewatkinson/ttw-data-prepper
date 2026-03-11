@@ -1,0 +1,7 @@
+Elector No. Prefix,Elector No.,Elector No. Suffix,Full Elector No.,Surname,Forename,Middle Names,Date of Attainment,Address1,Address2,Address3,Address4,Address5,Address6,PostCode,UPRN,GE2024 Voted,LE2026 Green Voting Intention,LE2026 Party,LE2026 Postal Voter,FranchiseMarker,New,P/PB,DNK,1st round,Full name,Comments,Email Address,Phone number,Issues
+KG1,1,0,KG1-1-0,Smith,John,,,42 Chamberlayne Road,London,,,,,NW10 3JU,,Y,1,G,,F,,,,,John Smith,,john@example.com,07700900001,
+KG1,2,0,KG1-2-0,Jones,Sarah,,,44 Chamberlayne Road,London,,,,,NW10 3JU,,,3,Lab,,F,,,Do not knock,,Sarah Jones,,sarah@example.com,07700900002,None
+KG1,3,0,KG1-3-0,Patel,Raj,,,Ontario Point 10,Kilburn Lane,,,,,NW10 4AA,,Y,2,Con,Y,F,,,,busy,RAJ PATEL,,,,Housing
+KG1,3,1,KG1-3-1,Patel,Priya,,,Ontario Point 10,Kilburn Lane,,,,,NW10 4AA,,,,,,F,,,,Yes spoken to,Priya Patel,,,07700900004,
+HP1,20,0,HP1-20-0,Brown,Michael,,15/03/2008,15 High Road,,,,,,NW10 4UJ,,Y,1,G,Y,F,,PB,,,Michael Brown,,michael@example.com,07700900005,
+HP1,21,0,HP1-21-0,Garcia-Lopez,Maria,,,22 High Road,,,,,,NW10 4UJ,,,,,,F,yes,,,,Maria Garcia-Lopez,Free parking,maria@example.com,,Potholes

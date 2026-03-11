@@ -1,21 +1,21 @@
-﻿Elector No. Prefix,Elector No.,Elector No. Suffix,Full Elector No.,Surname,Forename,Middle Names,Address1,Address2,Address3,Address4,Address5,Address6,PostCode,UPRN,2022 Green Voting Intention,2022 Party,2022 Voted,2026 Green Voting Intention,2026 Party,2026 Postal Voter
-BA2,1,1,BA2-1-1,Chapman,Michael,Jane,1 Alnwick Court,Norwich,,,,,NR5 9LD,,2,L,v,1,G,v
-BA2,2,2,BA2-2-2,Haige,Peter,Anand,3 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
-BA2,3,3,BA2-3-3,Wilkes,David,,3 Alnwick Court,Norwich,,,,,NR5 9LD,,4,Lab,v,3,Lab,
-BA2,4,1,BA2-4-1,Gray,Janet,Stephen,4 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
-BA2,5,2,BA2-5-2,Gray,Diane,,5 Alnwick Court,Norwich,,,,,NR5 9LD,,5,LD,v,5,LD,
-BA2,6,3,BA2-6-3,Paston,Paul,Rose,5 Alnwick Court,Norwich,,,,,NR5 9LD,,,,v,,,v
-BA2,7,2,BA2-7-2,Roberts,Julie,John,6 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
-BA2,8,3,BA2-8-3,Roberts,Dorothy,Jane,7 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
-BA2,9,4,BA2-9-4,Wyatt,June,Anne,8 Alnwick Court,Norwich,,,,,NR5 9LD,,2,Con,,2,Con,
-BA2,10,2,BA2-10-2,Rolfe,Kelvin,Anthony,9 Alnwick Court,Norwich,,,,,NR5 9LD,,,G,,,G,
-BA2,11,3,BA2-11-3,Davies,Diane,,10 Alnwick Court,Norwich,,,,,NR5 9LD,,,,v,,,v
-BA2,12,4,BA2-12-4,Smith,Debra,O,10 Alnwick Court,Norwich,,,,,NR5 9LD,,5,,v,5,,v
-BA2,13,3,BA2-13-3,Wright,Paul,Florence,11 Alnwick Court,Norwich,,,,,NR5 9LD,,,G,,,G,
-BA2,14,4,BA2-14-4,Wright,Cecilia,I,12 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
-BA2,15,5,BA2-15-5,Bowman,Marjorie,,12 Alnwick Court,Norwich,,,,,NR5 9LD,,3,REF,,3,REF,
-BA2,16,3,BA2-16-3,Davies,June,Nicholas,14 Alnwick Court,Norwich,,,,,NR5 9LD,,,,v,,,
-BA2,17,4,BA2-17-4,Davies,Arthur,C,15 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
-BA2,18,5,BA2-18-5,Blowers,Christine,Edwin,16 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
-BA2,19,4,BA2-19-4,Hewitt,Michael,Kathleen,17 Alnwick Court,Norwich,,,,,NR5 9LD,,1,G,v,1,G,v
-BA2,21,5,BA2-21-5,Page,Peter,Christina,19 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,
+Elector No. Prefix,Elector No.,Elector No. Suffix,Full Elector No.,Surname,Forename,Middle Names,Address1,Address2,Address3,Address4,Address5,Address6,PostCode,UPRN,2022 Green Voting Intention,2022 Party,2022 Voted,2026 Green Voting Intention,2026 Party,2026 Postal Voter,ElectorTitle,IERStatus,FranchiseMarker,Euro,Parl,County,Ward,SubHouse,House,MethodOfVerification,ElectorID,Suffix
+BA2,1,1,BA2-1-1,Chapman,Michael,Jane,1 Alnwick Court,Norwich,,,,,NR5 9LD,,2,L,Y,1,G,Y,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E1,1
+BA2,2,2,BA2-2-2,Haige,Peter,Anand,3 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E2,2
+BA2,3,3,BA2-3-3,Wilkes,David,,3 Alnwick Court,Norwich,,,,,NR5 9LD,,4,Lab,Y,3,Lab,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E3,3
+BA2,4,1,BA2-4-1,Gray,Janet,Stephen,4 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E4,1
+BA2,5,2,BA2-5-2,Gray,Diane,,5 Alnwick Court,Norwich,,,,,NR5 9LD,,5,LD,Y,5,LD,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E5,2
+BA2,6,3,BA2-6-3,Paston,Paul,Rose,5 Alnwick Court,Norwich,,,,,NR5 9LD,,,,Y,,,Y,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E6,3
+BA2,7,2,BA2-7-2,Roberts,Julie,John,6 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E7,2
+BA2,8,3,BA2-8-3,Roberts,Dorothy,Jane,7 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E8,3
+BA2,9,4,BA2-9-4,Wyatt,June,Anne,8 Alnwick Court,Norwich,,,,,NR5 9LD,,2,Con,,2,Con,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E9,4
+BA2,10,2,BA2-10-2,Rolfe,Kelvin,Anthony,9 Alnwick Court,Norwich,,,,,NR5 9LD,,,G,,,G,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E10,2
+BA2,11,3,BA2-11-3,Davies,Diane,,10 Alnwick Court,Norwich,,,,,NR5 9LD,,,,Y,,,Y,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E11,3
+BA2,12,4,BA2-12-4,Smith,Debra,O,10 Alnwick Court,Norwich,,,,,NR5 9LD,,5,,Y,5,,Y,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E12,4
+BA2,13,3,BA2-13-3,Wright,Paul,Florence,11 Alnwick Court,Norwich,,,,,NR5 9LD,,,G,,,G,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E13,3
+BA2,14,4,BA2-14-4,Wright,Cecilia,I,12 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E14,4
+BA2,15,5,BA2-15-5,Bowman,Marjorie,,12 Alnwick Court,Norwich,,,,,NR5 9LD,,3,REF,,3,REF,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E15,5
+BA2,16,3,BA2-16-3,Davies,June,Nicholas,14 Alnwick Court,Norwich,,,,,NR5 9LD,,,,Y,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E16,3
+BA2,17,4,BA2-17-4,Davies,Arthur,C,15 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E17,4
+BA2,18,5,BA2-18-5,Blowers,Christine,Edwin,16 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E18,5
+BA2,19,4,BA2-19-4,Hewitt,Michael,Kathleen,17 Alnwick Court,Norwich,,,,,NR5 9LD,,1,G,Y,1,G,Y,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E19,4
+BA2,21,5,BA2-21-5,Page,Peter,Christina,19 Alnwick Court,Norwich,,,,,NR5 9LD,,,,,,,,Mr,V,E,Eastern,Norwich South,Norfolk,Bowthorpe,,,D,E21,5

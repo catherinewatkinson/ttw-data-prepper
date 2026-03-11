@@ -99,6 +99,10 @@ class EnrichQAReport:
         self.ce_ambiguous = []      # [(profile_name, addr, [(name, score)])]
         self.ce_unmatched = []      # [(profile_name, addr, best_score)]
         self.ce_duplicate_visits = [] # [(base_key, count)]
+        self.ce_unmatched_rows = []  # [dict] full rows for unmatched CSV export
+        self.ce_headers = []         # original DS3 column order
+        self.ce_has_dnk = False      # True if DS3 CSV has a DNK column
+        self.unmatched_csv_path = ""  # set by main() if written
 
         # Data
         self.conflicts = []         # [(row_key, field, er_val, ce_val, resolved)]
@@ -194,6 +198,8 @@ class EnrichQAReport:
                 lines.append(f"Duplicate canvassing visits: {len(self.ce_duplicate_visits)}")
                 for key, count in self.ce_duplicate_visits:
                     lines.append(f"    Base row {key}: {count} visits (last used)")
+            if self.unmatched_csv_path:
+                lines.append(f"Unmatched rows exported to: {self.unmatched_csv_path}")
             lines.append("")
 
         # --- Canvassing Register Matching ---
@@ -416,9 +422,20 @@ def _surname_forename_similarity(surname_a, forename_a, surname_b, forename_b):
             + 0.4 * _name_similarity(forename_a, forename_b))
 
 
+def _normalize_address(addr):
+    """Normalize address for comparison: strip brackets, commas, leading zeros, sort tokens."""
+    s = addr or ""
+    s = s.replace("[", "").replace("]", "")
+    s = s.replace(",", "")
+    s = re.sub(r'\b0+(\d)', r'\1', s)  # "Flat 01" -> "Flat 1"
+    s = re.sub(r'\s+', ' ', s).strip()
+    s = " ".join(sorted(s.split()))    # "1 Willesden House" -> "1 House Willesden"
+    return s
+
+
 def _address_similarity(addr_a, addr_b):
     """Compare two address strings using Dice coefficient."""
-    return _dice_coefficient(addr_a or "", addr_b or "")
+    return _dice_coefficient(_normalize_address(addr_a), _normalize_address(addr_b))
 
 
 def _extract_postcode(row_dict, field_order=("address 4", "address 3", "address 2", "address 1")):
@@ -598,6 +615,54 @@ def match_enriched_register(base_rows, er_rows, threshold, report):
 # Fuzzy matching (canvassing export)
 # ---------------------------------------------------------------------------
 
+def _append_unmatched_export(report, ce_row, category, score=None,
+                             base_row=None, best_name=None,
+                             second_base_row=None, second_name=None,
+                             second_score=None):
+    """Build and append a row to report.ce_unmatched_rows for CSV export."""
+    export = {"Match Category": category}
+    export["Match Score"] = f"{score:.4f}" if score is not None else ""
+    if base_row:
+        export["Best Candidate Elector No."] = base_row.get("Full Elector No.", "")
+        export["Best Candidate Name"] = best_name or ""
+        export["Best Candidate Address"] = (
+            f"{base_row.get('Address1', '')} {base_row.get('Address2', '')}".strip())
+        export["Best Candidate PostCode"] = base_row.get("PostCode", "")
+    else:
+        export["Best Candidate Elector No."] = ""
+        export["Best Candidate Name"] = ""
+        export["Best Candidate Address"] = ""
+        export["Best Candidate PostCode"] = ""
+    if second_base_row:
+        export["2nd Candidate Elector No."] = second_base_row.get("Full Elector No.", "")
+        export["2nd Candidate Name"] = second_name or ""
+        export["2nd Candidate Score"] = f"{second_score:.4f}" if second_score is not None else ""
+    else:
+        export["2nd Candidate Elector No."] = ""
+        export["2nd Candidate Name"] = ""
+        export["2nd Candidate Score"] = ""
+    export.update(ce_row)
+    report.ce_unmatched_rows.append(export)
+
+
+_UNMATCHED_HELPER_COLS = [
+    "Match Category", "Match Score",
+    "Best Candidate Elector No.", "Best Candidate Name",
+    "Best Candidate Address", "Best Candidate PostCode",
+    "2nd Candidate Elector No.", "2nd Candidate Name", "2nd Candidate Score",
+]
+
+
+def _write_unmatched_csv(unmatched_rows, output_path, ce_headers):
+    """Write unmatched/possible/ambiguous canvassing rows to CSV."""
+    headers = _UNMATCHED_HELPER_COLS + list(ce_headers)
+    with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers, lineterminator="\r\n",
+                                extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(unmatched_rows)
+
+
 def match_canvassing_export(base_rows, ce_rows, threshold, report):
     """Match canvassing rows to base using fuzzy matching.
     Returns dict: base_index -> ce_row."""
@@ -640,10 +705,12 @@ def match_canvassing_export(base_rows, ce_rows, threshold, report):
             effective_threshold = NO_POSTCODE_THRESHOLD
             if not candidates:
                 report.ce_unmatched.append((profile_name, ce_addr, None))
+                _append_unmatched_export(report, ce_row, "unmatched")
                 continue
 
         if not candidates:
             report.ce_unmatched.append((profile_name, ce_addr, None))
+            _append_unmatched_export(report, ce_row, "unmatched")
             continue
 
         # Score all candidates
@@ -664,6 +731,15 @@ def match_canvassing_export(base_rows, ce_rows, threshold, report):
                 # Ambiguous
                 cands = [(scored[0][2], scored[0][0]), (scored[1][2], scored[1][0])]
                 report.ce_ambiguous.append((profile_name, ce_addr, cands))
+                base_row_1 = base_rows[scored[0][1]]
+                base_row_2 = base_rows[scored[1][1]]
+                _append_unmatched_export(
+                    report, ce_row, "ambiguous",
+                    score=scored[0][0], base_row=base_row_1,
+                    best_name=scored[0][2],
+                    second_base_row=base_row_2,
+                    second_name=scored[1][2],
+                    second_score=scored[1][0])
                 continue
 
         if best_score >= effective_threshold:
@@ -674,8 +750,17 @@ def match_canvassing_export(base_rows, ce_rows, threshold, report):
         elif best_score >= POSSIBLE_THRESHOLD:
             # Possible match — report only
             report.ce_possible.append((profile_name, ce_addr, best_score, best_name))
+            _append_unmatched_export(
+                report, ce_row, "possible",
+                score=best_score, base_row=base_rows[best_idx],
+                best_name=best_name)
         else:
             report.ce_unmatched.append((profile_name, ce_addr, best_score if scored else None))
+            _append_unmatched_export(
+                report, ce_row, "unmatched",
+                score=best_score if scored else None,
+                base_row=base_rows[best_idx] if scored else None,
+                best_name=best_name if scored else None)
 
     # Check for duplicate canvassing visits (multiple ce rows matching same base)
     for base_idx, ce_indices in base_match_count.items():
@@ -714,8 +799,8 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
         if er_match:
             # GE24 column -> voted
             ge24_val = er_match.get("GE24", "").strip()
-            if ge24_val:
-                er_voted = "v"
+            if ge24_val and ge24_val.upper() not in ("N", "NO"):
+                er_voted = "Y"
             # Party from enriched register
             er_party_raw = er_match.get("Party", "").strip()
             er_party = map_party_name(er_party_raw, report, "enriched_register")
@@ -752,14 +837,15 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
             pv = er_match.get("PostalVoter?", "").strip()
             if not pv:
                 pv = er_match.get("P/PB", "").strip()
-            if pv:
-                postal = "v"
+            # Treat explicit "N"/"No" as blank (no postal vote)
+            if pv and pv.upper() not in ("N", "NO"):
+                postal = "Y"
                 report.questions_data["PostalVoter"] = True
 
         if not postal and ce_match:
             visit_postal = ce_match.get("visit_postal_vote", "").strip()
-            if visit_postal and visit_postal.upper() not in ("FALSE", ""):
-                postal = "v"
+            if visit_postal and visit_postal.upper() not in ("FALSE", "N", "NO", ""):
+                postal = "Y"
 
         _set_field(row, postal_key, postal, row_key, report)
         _set_field(row, party_key, "", row_key, report)
@@ -798,10 +884,18 @@ def add_extra_columns(row, er_match, ce_match, report):
         for col in EXTRA_COLS_CANVASSING:
             val = ce_match.get(col, "").strip()
             _set_field(row, col, val, row_key, report)
+        # Optional DNK from canvassing export (only if column exists in CE CSV)
+        if report.ce_has_dnk:
+            dnk_val = ce_match.get("DNK", "").strip()
+            _set_field(row, "DNK", dnk_val, row_key, report)
+            if dnk_val:
+                report.questions_data["DNK"] = True
     else:
         for col in EXTRA_COLS_CANVASSING:
             if col not in row:
                 row[col] = ""
+        if report.ce_has_dnk and "DNK" not in row:
+            row["DNK"] = ""
 
 
 # ---------------------------------------------------------------------------
@@ -809,7 +903,8 @@ def add_extra_columns(row, er_match, ce_match, report):
 # ---------------------------------------------------------------------------
 
 def build_enrichment_headers(base_headers, historic_elections, future_elections,
-                             has_er, has_ce, strip_extra, report=None, has_cr=False):
+                             has_er, has_ce, strip_extra, report=None, has_cr=False,
+                             ce_has_dnk=False):
     """Build output header list preserving base order, appending election + extra cols.
 
     Deduplicates: skips columns that already exist in base_headers.
@@ -849,6 +944,9 @@ def build_enrichment_headers(base_headers, historic_elections, future_elections,
         if has_cr:
             for col in EXTRA_COLS_CANVASSING_REGISTER:
                 _add_col(col)
+        # DNK from CE (conditional — only when CE CSV has the column)
+        if ce_has_dnk and not has_er:  # ER already adds DNK via EXTRA_COLS_REGISTER
+            _add_col("DNK")
 
     return headers
 
@@ -892,14 +990,14 @@ def validate_enriched_register(headers):
         print(f"Found columns: {headers}", file=sys.stderr)
         sys.exit(1)
 
-    # Check name columns
-    has_forename = bool(header_set & {"Forename", "First Name"})
-    has_surname = bool(header_set & {"Surname", "Last Name"})
+    # Check name columns (accept council-format ElectorForename/ElectorSurname too)
+    has_forename = bool(header_set & {"Forename", "First Name", "ElectorForename"})
+    has_surname = bool(header_set & {"Surname", "Last Name", "ElectorSurname"})
     missing = []
     if not has_forename:
-        missing.append("Forename or First Name")
+        missing.append("Forename, First Name, or ElectorForename")
     if not has_surname:
-        missing.append("Surname or Last Name")
+        missing.append("Surname, Last Name, or ElectorSurname")
     if missing:
         print(f"ERROR: Enriched register missing required columns: {missing}",
               file=sys.stderr)
@@ -1064,6 +1162,8 @@ def main():
             print(f"Reading canvassing export: {args.canvassing_export}...")
         ce_rows, _, ce_headers = read_input(args.canvassing_export)
         validate_canvassing_export(ce_headers)
+        report.ce_headers = ce_headers
+        report.ce_has_dnk = "DNK" in ce_headers
         ce_match_map = match_canvassing_export(
             base_rows, ce_rows, args.match_threshold, report)
 
@@ -1125,6 +1225,7 @@ def main():
         strip_extra=args.strip_extra,
         report=report,
         has_cr=bool(args.canvassing_register),
+        ce_has_dnk=report.ce_has_dnk,
     )
 
     # --- Write output (unless dry-run) ---
@@ -1132,6 +1233,16 @@ def main():
         if not args.quiet:
             print(f"Writing output: {args.output}...")
         write_output(output_rows, output_headers, args.output)
+
+        # Write unmatched canvassing rows CSV if any
+        if report.ce_unmatched_rows:
+            output_p = Path(args.output)
+            unmatched_path = str(output_p.parent / f"{output_p.stem}.unmatched.csv")
+            _write_unmatched_csv(report.ce_unmatched_rows, unmatched_path,
+                                 report.ce_headers)
+            report.unmatched_csv_path = unmatched_path
+            if not args.quiet:
+                print(f"Unmatched canvassing rows: {unmatched_path}")
 
     # --- Write report ---
     report.write(report_path)

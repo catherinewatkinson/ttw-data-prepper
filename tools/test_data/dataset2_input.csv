@@ -1,0 +1,8 @@
+PDCode,RollNo,FranchiseMarker,DateOfAttainment,GE24,PostalVoter?,New,P/PB,DNK,1st round,ElectorSurname,ElectorForename,Full name,RegisteredAddress1,RegisteredAddress2,RegisteredAddress3,RegisteredAddress4,RegisteredAddress5,RegisteredAddress6,PostCode,Party,1-5,Comments,Email Address,Phone number,Issues
+KG1,1,F,,yes,,,,,,Smith,John,John Smith,42 Chamberlayne Road,London,,,,,NW10 3JU,Green,1,,john@example.com,07700900001,
+KG1,2,F,,,,,,Do not knock,,Jones,Sarah,Sarah Jones,44 Chamberlayne Road,London,,,,,NW10 3JU,Labour,3,,sarah@example.com,07700900002,None
+KG1,3.5,F,,yes,Yes,,,,busy,PATEL,RAJ,RAJ PATEL,10 Ontario Point,Kilburn Lane,,,,,NW10 4AA,Conservative,2,,,,Housing
+KG1,3.75,F,,N,No,,,,Yes spoken to,Patel,Priya,Priya Patel,10 Ontario Point,Kilburn Lane,,,,,NW10 4AA,,,,,07700900004,
+HP1,20,F,15/03/2008,yes,v,,PB,,,Brown,Michael,Michael Brown,15 High Road,,,,,,NW10 4UJ,Green,1,,michael@example.com,07700900005,
+HP1,21,F,,,N,yes,,,,Garcia-Lopez,Maria,Maria Garcia-Lopez,22 High Road,,,,,,NW10 4UJ,,,Free parking,maria@example.com,,Potholes
+HP1,22,F,,,,,,,,,Ghost,Ghost NoAddress,,,,,,,,,,,,,,,

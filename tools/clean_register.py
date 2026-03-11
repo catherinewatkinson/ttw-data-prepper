@@ -92,8 +92,82 @@ FIELD_MAP = {
     "PostCode": "PostCode",
     "UPRN": "UPRN",
 }
+# Reverse lookup: TTW output name -> council source name
+_FIELD_MAP_REVERSE = {v: k for k, v in FIELD_MAP.items()}
 
-# Columns discarded from council data (logged in report)
+
+def _norm_col(name):
+    """Normalize column name for alias matching: lowercase, strip spaces/underscores/hyphens/dots."""
+    return re.sub(r'[\s_\-\.]+', '', name).lower()
+
+
+# Column aliases: normalized_alias -> canonical council column name
+# Maps TTW output names and common variants to the council column names
+# expected by FIELD_MAP and REQUIRED_COUNCIL_COLUMNS.
+COLUMN_ALIASES = {}
+_alias_entries = {
+    "PDCode": ["pdcode", "pd", "pollingdistrict", "electornopre", "electornoprefix"],
+    "RollNo": ["rollno", "rollnumber", "electorno", "electornumber"],
+    "ElectorForename": ["electorforename", "forename", "firstname", "givenname"],
+    "ElectorMiddleName": ["electormiddlename", "middlenames", "middlename"],
+    "ElectorSurname": ["electorsurname", "surname", "lastname", "familyname"],
+    "DateOfAttainment": ["dateofattainment", "dateattained", "doa",
+                         "attainmentdate"],
+    "RegisteredAddress1": ["registeredaddress1", "address1", "regaddress1"],
+    "RegisteredAddress2": ["registeredaddress2", "address2", "regaddress2"],
+    "RegisteredAddress3": ["registeredaddress3", "address3", "regaddress3"],
+    "RegisteredAddress4": ["registeredaddress4", "address4", "regaddress4"],
+    "RegisteredAddress5": ["registeredaddress5", "address5", "regaddress5"],
+    "RegisteredAddress6": ["registeredaddress6", "address6", "regaddress6"],
+    "PostCode": ["postcode", "zipcode"],
+    "UPRN": ["uprn"],
+    "Suffix": ["suffix", "electorsuffix", "electornosuffix"],
+    "ElectorTitle": ["electortitle", "title"],
+    "ElectorID": ["electorid"],
+}
+for canonical, aliases in _alias_entries.items():
+    for alias in aliases:
+        COLUMN_ALIASES[alias] = canonical
+
+
+def resolve_aliases(headers, quiet=False):
+    """Resolve column name aliases in-place. Returns (renamed_headers, alias_log).
+
+    Only renames a column if its canonical target is not already present.
+    This ensures council-format names take precedence (e.g. if both
+    RegisteredAddress1 and Address1 exist, only RegisteredAddress1 is used).
+    """
+    alias_log = []  # [(original_name, canonical_name)]
+    skipped_aliases = []  # [(original_name, canonical_name, reason)]
+    canonical_present = set(headers)  # Track what's already in headers
+    new_headers = []
+
+    for h in headers:
+        norm = _norm_col(h)
+        canonical = COLUMN_ALIASES.get(norm)
+        if canonical and canonical != h and canonical not in canonical_present:
+            alias_log.append((h, canonical))
+            canonical_present.add(canonical)
+            new_headers.append(canonical)
+        elif canonical and canonical != h and canonical in canonical_present:
+            skipped_aliases.append((h, canonical))
+            new_headers.append(h)
+        else:
+            new_headers.append(h)
+
+    if alias_log and not quiet:
+        print(f"NOTE: Resolved {len(alias_log)} column alias(es):", file=sys.stderr)
+        for orig, canon in alias_log:
+            print(f"  '{orig}' -> '{canon}'", file=sys.stderr)
+    if skipped_aliases and not quiet:
+        for orig, canon in skipped_aliases:
+            print(f"NOTE: Column '{orig}' also maps to '{canon}' but "
+                  f"'{canon}' already present — kept as '{orig}'", file=sys.stderr)
+
+    return new_headers, alias_log
+
+
+# Council-only columns (preserved by default, stripped with --strip-extra)
 COUNCIL_ONLY_COLUMNS = [
     "ElectorTitle", "IERStatus", "FranchiseMarker",
     "Euro", "Parl", "County", "Ward",
@@ -103,8 +177,8 @@ COUNCIL_ONLY_COLUMNS = [
 # Columns with potential address data (logged with extra detail)
 SPECIAL_COLUMNS = ["SubHouse", "House"]
 
-# Enrichment columns discarded (logged when --enriched-columns)
-ENRICHMENT_DISCARD_COLUMNS = ["Full Name"]
+# Enrichment columns recognized but not mapped (preserved unless --strip-extra)
+ENRICHMENT_DISCARD_COLUMNS = ["Full Name", "Full name"]
 
 # Enrichment extra columns preserved in output (unless --strip-extra)
 ENRICHMENT_EXTRA_COLUMNS = [
@@ -114,7 +188,7 @@ ENRICHMENT_EXTRA_COLUMNS = [
 ]
 
 # Enrichment source columns (mapped to TTW election columns)
-ENRICHMENT_SOURCE_COLUMNS = ["GE24", "Party", "1-5"]
+ENRICHMENT_SOURCE_COLUMNS = ["GE24", "Party", "1-5", "PostalVoter?"]
 
 # TTW headers that indicate a file-swap
 TTW_INDICATOR_HEADERS = {"Elector No. Prefix", "Full Elector No.", "Elector No. Suffix"}
@@ -159,6 +233,9 @@ class QAReport:
         self.fixes = []           # [(row, field, old_value, new_value, issue)]
         self.info = []            # [str]
         self.special_columns = {} # {col: [(row, value)]}
+        self.unrecognized_columns = []  # [col_name]
+        self.alias_log = []  # [(original_name, canonical_name)]
+        self.strip_extra = False
 
     def write(self, path):
         """Write human-readable report with machine-readable footer."""
@@ -262,6 +339,19 @@ class QAReport:
                     lines.append(f"    Row {row}: '{val}'")
                 if len(entries) > 10:
                     lines.append(f"    ... and {len(entries) - 10} more")
+            lines.append("")
+
+        if self.unrecognized_columns:
+            label = "stripped" if self.strip_extra else "preserved"
+            lines.append(f"--- Unrecognized Input Columns ({label}) ---")
+            for col in self.unrecognized_columns:
+                lines.append(f"  {col}")
+            lines.append("")
+
+        if self.alias_log:
+            lines.append("--- Column Aliases Resolved ---")
+            for orig, canon in self.alias_log:
+                lines.append(f"  '{orig}' -> '{canon}'")
             lines.append("")
 
         if self.info:
@@ -917,17 +1007,23 @@ def map_election_data(row, council_row, elections, election_types, row_num, repo
                 f"Unrecognized party code '{party_val}', kept as-is"))
         row[party_key] = party_val
 
-        # Voted (historic only)
+        # Voted (historic only) — TTW expects "Y" or blank
         if election_type == "historic":
             voted_key = f"{election_name} Voted"
             voted_val = council_row.get(voted_key, "").strip()
-            row[voted_key] = "v" if voted_val else ""
+            # Treat explicit "N"/"No" as blank (did not vote)
+            if voted_val.upper() in ("N", "NO"):
+                voted_val = ""
+            row[voted_key] = "Y" if voted_val else ""
 
-        # Postal Voter (future only)
+        # Postal Voter (future only) — TTW expects "Y" or blank
         if election_type == "future":
             postal_key = f"{election_name} Postal Voter"
             postal_val = council_row.get(postal_key, "").strip()
-            row[postal_key] = "v" if postal_val else ""
+            # Treat explicit "N"/"No" as blank (no postal vote)
+            if postal_val.upper() in ("N", "NO"):
+                postal_val = ""
+            row[postal_key] = "Y" if postal_val else ""
 
 
 # ---------------------------------------------------------------------------
@@ -936,18 +1032,22 @@ def map_election_data(row, council_row, elections, election_types, row_num, repo
 
 def map_enriched_election_data(row, council_row, elections, election_types,
                                row_num, report):
-    """Map enrichment columns (GE24, Party, 1-5) to TTW election columns.
+    """Map enrichment columns (GE24, Party, 1-5, PostalVoter?) to TTW election columns.
 
     GE24 is historic data -> maps to {election} Voted for historic elections.
     Party and 1-5 are current loyalty -> map to {election} Party and
     {election} Green Voting Intention for the future election.
+    PostalVoter? -> maps to {election} Postal Voter for the future election.
     """
     for election_name, election_type in zip(elections, election_types):
         if election_type == "historic":
-            # GE24 -> Voted: any non-empty value -> "v"
+            # GE24 -> Voted: TTW expects "Y" or blank
             voted_key = f"{election_name} Voted"
             ge24_val = council_row.get("GE24", "").strip()
-            row[voted_key] = "v" if ge24_val else ""
+            # Treat explicit "N"/"No" as blank (did not vote)
+            if ge24_val.upper() in ("N", "NO"):
+                ge24_val = ""
+            row[voted_key] = "Y" if ge24_val else ""
 
         elif election_type == "future":
             gvi_key = f"{election_name} Green Voting Intention"
@@ -969,8 +1069,12 @@ def map_enriched_election_data(row, council_row, elections, election_types,
                 gvi_val = ""
             row[gvi_key] = gvi_val
 
-            # No postal voter source in enrichment data
-            row[postal_key] = ""
+            # PostalVoter? -> Postal Voter: TTW expects "Y" or blank
+            postal_raw = council_row.get("PostalVoter?", "").strip()
+            # Treat explicit "N"/"No" as blank (no postal vote)
+            if postal_raw.upper() in ("N", "NO"):
+                postal_raw = ""
+            row[postal_key] = "Y" if postal_raw else ""
 
 
 # ---------------------------------------------------------------------------
@@ -1008,12 +1112,19 @@ def build_output_headers(rows, elections, election_types, has_date_data=False,
             elif election_type == "future":
                 headers.append(f"{election_name} Postal Voter")
 
-    # Add extra columns when --enriched-columns is active (unless --strip-extra)
-    if enriched_columns and not strip_extra:
-        # Only include extra columns that exist in the input
+    # Append extra input columns to output (unless --strip-extra)
+    if not strip_extra:
+        header_set = set(headers)
         input_set = set(input_headers or [])
-        for col in ENRICHMENT_EXTRA_COLUMNS:
-            if col in input_set:
+        exclude = set(FIELD_MAP.keys())
+        # Exclude TTW-named columns only when their mapped source is present
+        for ttw_name, source_name in _FIELD_MAP_REVERSE.items():
+            if source_name in input_set:
+                exclude.add(ttw_name)
+        if enriched_columns:
+            exclude |= set(ENRICHMENT_SOURCE_COLUMNS)
+        for col in (input_headers or []):
+            if col and col not in header_set and col not in exclude:
                 headers.append(col)
 
     # Optionally remove entirely-empty optional columns
@@ -1053,9 +1164,11 @@ def main():
                         help="Input has enrichment columns (GE24, Party, 1-5) in "
                              "non-standard names. Maps them to TTW election columns.")
     parser.add_argument("--strip-extra", action="store_true",
-                        help="Remove non-TTW extra columns (Email, Phone, DNK, etc.) "
-                             "from output. Only relevant with --enriched-columns.")
+                        help="Remove non-TTW columns from output. By default, all "
+                             "input columns are preserved in the output.")
     parser.add_argument("--quiet", action="store_true", help="Suppress stdout progress")
+    parser.add_argument("--no-aliases", action="store_true",
+                        help="Disable automatic column name alias resolution")
     args = parser.parse_args()
 
     # Validate election args
@@ -1088,24 +1201,74 @@ def main():
     report.output_file = args.output
     report.mode = args.mode
     report.suffix_mode = "auto"
+    report.strip_extra = args.strip_extra
     report_path = args.report or f"{args.output}.report.txt"
 
     # --- Step 1: Read input ---
     if not args.quiet:
         print(f"Reading {args.input}...")
     council_rows, encoding, headers = read_input(args.input)
+
+    # File-swap detection on raw headers (before alias resolution, which would
+    # rename TTW indicator headers like "Elector No. Prefix" -> "PDCode")
+    raw_header_set = set(headers)
+    if raw_header_set & TTW_INDICATOR_HEADERS:
+        print("ERROR: Input file appears to be in TTW format already, not council format.",
+              file=sys.stderr)
+        print("Did you accidentally swap the input and output files?", file=sys.stderr)
+        print(f"Headers found: {headers}", file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve column name aliases (e.g. "Address1" -> "RegisteredAddress1")
+    if not args.no_aliases:
+        headers, alias_log = resolve_aliases(headers, quiet=args.quiet)
+        if alias_log:
+            old_to_new = dict(alias_log)
+            for row in council_rows:
+                for old_name, new_name in old_to_new.items():
+                    if old_name in row:
+                        row[new_name] = row.pop(old_name)
+        report.alias_log = alias_log
+
     report.input_encoding = encoding
     report.input_columns = headers
     report.total_input = len(council_rows)
+
+    # --- Check for unrecognized input columns ---
+    known_columns = (set(FIELD_MAP.keys()) | set(COUNCIL_ONLY_COLUMNS)
+                     | set(SPECIAL_COLUMNS) | {"Suffix"})
+    if args.enriched_columns:
+        known_columns |= set(ENRICHMENT_EXTRA_COLUMNS)
+        known_columns |= set(ENRICHMENT_DISCARD_COLUMNS)
+        known_columns |= set(ENRICHMENT_SOURCE_COLUMNS)
+    if args.mode == "register+elections" and not args.enriched_columns:
+        for ename, etype in zip(args.elections, args.election_types):
+            known_columns.add(f"{ename} Green Voting Intention")
+            known_columns.add(f"{ename} Party")
+            if etype == "historic":
+                known_columns.add(f"{ename} Voted")
+            if etype == "future":
+                known_columns.add(f"{ename} Postal Voter")
+
+    report.unrecognized_columns = [h for h in headers if h and h not in known_columns]
+    if report.unrecognized_columns and not args.quiet:
+        if args.strip_extra:
+            print(f"NOTE: {len(report.unrecognized_columns)} input column(s) not recognized "
+                  f"and will be stripped: {report.unrecognized_columns}", file=sys.stderr)
+        else:
+            print(f"NOTE: {len(report.unrecognized_columns)} input column(s) not recognized "
+                  f"and will be passed through unchanged: {report.unrecognized_columns}", file=sys.stderr)
 
     # --- Step 2-4: Validate ---
     validate_input(headers, council_rows, report, args.max_rows)
 
     # --- Log discarded and special columns ---
     header_set = set(headers)
-    report.discarded_columns = [c for c in COUNCIL_ONLY_COLUMNS if c in header_set]
-    if args.enriched_columns:
-        report.discarded_columns += [c for c in ENRICHMENT_DISCARD_COLUMNS if c in header_set]
+    report.discarded_columns = []
+    if args.strip_extra:
+        report.discarded_columns = [c for c in COUNCIL_ONLY_COLUMNS if c in header_set]
+        if args.enriched_columns:
+            report.discarded_columns += [c for c in ENRICHMENT_DISCARD_COLUMNS if c in header_set]
     for col in SPECIAL_COLUMNS:
         if col in header_set:
             non_empty = [(i + 2, r.get(col) or "") for i, r in enumerate(council_rows)
@@ -1121,6 +1284,17 @@ def main():
                     for k, v in council_row.items() if k is not None}
         # Map to TTW fields
         ttw_row = map_row(stripped)
+        # Preserve all input columns not already mapped by FIELD_MAP.
+        # If an input column has the same name as a TTW output field (e.g. "Address2"),
+        # only skip it if the corresponding mapped source column (e.g. "RegisteredAddress2")
+        # is present in the input — otherwise the data would be silently lost.
+        for col, val in stripped.items():
+            if col in FIELD_MAP:
+                continue  # Source column already consumed by map_row
+            source_col = _FIELD_MAP_REVERSE.get(col)
+            if source_col and source_col in stripped:
+                continue  # TTW-named col would overwrite properly mapped value
+            ttw_row[col] = val
         mapped_rows.append(ttw_row)
 
     # --- Step 6.4: Incorporate SubHouse data ---
@@ -1180,14 +1354,6 @@ def main():
                 else:
                     map_election_data(row, council_row, args.elections,
                                       args.election_types, i + 2, report)
-
-    # --- Step 11b: Copy extra columns when --enriched-columns ---
-    if args.enriched_columns:
-        for i, (row, council_row) in enumerate(zip(mapped_rows, council_rows)):
-            if i not in delete_indices:
-                for col in ENRICHMENT_EXTRA_COLUMNS:
-                    val = council_row.get(col) or ""
-                    row[col] = val.strip()
 
     # --- Step 12: Apply deletions ---
     output_rows = [row for i, row in enumerate(mapped_rows) if i not in delete_indices]
@@ -1258,6 +1424,42 @@ def main():
         print(f"Fixes:   {len(report.fixes)}")
         print(f"Warnings: {len(report.warnings)}")
         print(f"Report:  {report_path}")
+
+    # --- Enrichment/canvassing detection guidance ---
+    if not args.quiet:
+        input_header_set = set(headers)
+
+        # Detect enrichment source columns (GE24, Party, 1-5, PostalVoter?)
+        detected_enrichment = [c for c in ENRICHMENT_SOURCE_COLUMNS if c in input_header_set]
+        # Detect canvassing/extra columns
+        detected_canvassing = [c for c in ENRICHMENT_EXTRA_COLUMNS if c in input_header_set]
+
+        if detected_enrichment and not args.enriched_columns:
+            print(f"\nWARNING: Detected enrichment data columns: {detected_enrichment}",
+                  file=sys.stderr)
+            print("  These columns are preserved as-is but NOT mapped to TTW election format.",
+                  file=sys.stderr)
+            print("  To properly map them, re-run with:", file=sys.stderr)
+            print("    --mode register+elections --enriched-columns \\", file=sys.stderr)
+            print("    --elections <HISTORIC> <FUTURE> --election-types historic future",
+                  file=sys.stderr)
+            print("  (Replace <HISTORIC> and <FUTURE> with your election names, "
+                  "e.g. GE2024 LE2026)", file=sys.stderr)
+
+        if detected_canvassing:
+            print(f"\nNOTE: Detected canvassing data columns: {detected_canvassing}",
+                  file=sys.stderr)
+            print("  These columns are preserved in the output.", file=sys.stderr)
+
+        # TTW upload guidance
+        ttw_columns = set(TTW_REGISTER_HEADERS) | {"Date of Attainment"}
+        for ename in (args.elections if args.mode == "register+elections" else []):
+            ttw_columns |= {f"{ename} Green Voting Intention", f"{ename} Party",
+                            f"{ename} Voted", f"{ename} Postal Voter"}
+        extra_count = sum(1 for h in output_headers if h not in ttw_columns)
+        if extra_count > 0 and not args.strip_extra:
+            print(f"\nNOTE: Output contains {extra_count} non-TTW column(s). "
+                  f"If TTW rejects these, re-run with --strip-extra.", file=sys.stderr)
 
 
 if __name__ == "__main__":

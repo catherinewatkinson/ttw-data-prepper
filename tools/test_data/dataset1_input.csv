@@ -1,0 +1,8 @@
+PDCode,RollNo,FranchiseMarker,DateOfAttainment,GE24,New,P/PB,DNK,1st round,ElectorSurname,ElectorForename,Full Name,RegisteredAddress1,RegisteredAddress2,RegisteredAddress3,RegisteredAddress4,RegisteredAddress5,RegisteredAddress6,PostCode,Euro,Parl,Ward,SubHouse,House,MethodOfVerification,ElectorID,UPRN,Party,1-5,Comments,Email Address,Phone number,Issues,Identifier,Address Identifier
+KG1,1,F,,yes,,,,,Smith,John,John Smith,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,Kensal Green,,,D,E1,,Green,1,,john@example.com,07700900001,,ID001,ADDR001
+KG1,2,F,,,,,Do not knock,,Jones,Sarah,Sarah Jones,44 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,Kensal Green,,,D,E2,,Labour,3,,sarah@example.com,07700900002,None,ID002,ADDR002
+KG1,3.5,F,,yes,,P,,busy,PATEL,RAJ,RAJ PATEL,10 Ontario Point,Kilburn Lane,,,,,NW10 4AA,London,Brent North,Kensal Green,,,D,E3,10070834521,Conservative,2,,,,Housing,ID003,ADDR003
+KG1,3.75,F,,N,,,,Yes spoken to,Patel,Priya,Priya Patel,10 Ontario Point,Kilburn Lane,,,,,NW10 4AA,London,Brent North,Kensal Green,,,D,E4,10070834521,,,,priya@example.com,07700900004,,ID004,ADDR003
+HP1,20,F,15/03/2008,yes,,PB,,,Brown,Michael,Michael Brown,15 High Road,,,,,,NW10 4UJ,London,Brent North,Kensal Green,,,D,E5,,Green,1,,michael@example.com,07700900005,,ID005,ADDR005
+HP1,21,F,,,yes,,,,Garcia-Lopez,Maria,Maria Garcia-Lopez,22 High Road,,,,,,NW10 4UJ,London,Brent North,Kensal Green,,,D,E6,,,,Free parking,maria@example.com,,Potholes,ID006,ADDR006
+HP1,22,F,,,,,,,,Ghost,Ghost NoAddress,,,,,,,,,Brent North,Kensal Green,,,D,E7,,,,,,,,,

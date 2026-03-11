@@ -23,6 +23,10 @@ SCRIPT_DIR = Path(__file__).parent
 TOOL = SCRIPT_DIR / "clean_register.py"
 TEST_DATA = SCRIPT_DIR / "test_data"
 
+# Direct imports for unit-level tests (avoids subprocess overhead)
+sys.path.insert(0, str(SCRIPT_DIR))
+from clean_register import _norm_col, resolve_aliases, COLUMN_ALIASES
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -300,14 +304,18 @@ class TestFieldMapping(unittest.TestCase):
         os.unlink(cls.tmp_output.name)
         os.unlink(cls.tmp_report.name)
 
-    def test_council_columns_not_in_output(self):
-        """Council-only columns should not appear in output."""
-        council_only = {"ElectorTitle", "IERStatus", "FranchiseMarker",
-                        "Euro", "Parl", "County", "Ward",
-                        "MethodOfVerification", "ElectorID",
-                        "SubHouse", "House", "RegisteredAddress1"}
-        for col in council_only:
-            self.assertNotIn(col, self.headers, f"Council column '{col}' leaked to output")
+    def test_council_columns_preserved_in_output(self):
+        """Council-only columns should be preserved in output by default."""
+        # FIELD_MAP source columns (e.g. RegisteredAddress1) are consumed by mapping
+        # but non-mapped council columns should now pass through
+        preserved = {"ElectorTitle", "IERStatus", "FranchiseMarker",
+                     "Euro", "Parl", "County", "Ward",
+                     "MethodOfVerification", "ElectorID",
+                     "SubHouse", "House"}
+        for col in preserved:
+            self.assertIn(col, self.headers, f"Council column '{col}' should be preserved")
+        # FIELD_MAP source columns should NOT be in output (mapped to TTW names)
+        self.assertNotIn("RegisteredAddress1", self.headers)
 
     def test_ttw_columns_present(self):
         """Core TTW columns should be in output."""
@@ -352,10 +360,9 @@ class TestFieldMapping(unittest.TestCase):
         self.assertEqual(len(kate), 1)
         self.assertEqual(kate[0]["Address1"], "Oak Manor Flat 3")
 
-    def test_discarded_columns_in_report(self):
-        """Discarded columns should be listed in report."""
-        self.assertIn("Discarded columns", self.report_text)
-        self.assertIn("ElectorTitle", self.report_text)
+    def test_no_discarded_columns_by_default(self):
+        """Without --strip-extra, no columns should be listed as discarded."""
+        self.assertNotIn("Discarded columns", self.report_text)
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +589,7 @@ class TestColumnOrder(unittest.TestCase):
     """Test that output column order matches TTW test data format."""
 
     def test_register_only_column_order(self):
-        """Register-only output should match TTW test data column order."""
+        """Register-only output should have TTW columns first, then extras in input order."""
         tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         tmp_out.close()
         rc, _, _ = run_clean(
@@ -593,17 +600,21 @@ class TestColumnOrder(unittest.TestCase):
         os.unlink(tmp_out.name)
         self.assertEqual(rc, 0)
 
-        expected_order = [
+        ttw_core = [
             "Elector No. Prefix", "Elector No.", "Elector No. Suffix", "Full Elector No.",
             "Surname", "Forename", "Middle Names",
             "Address1", "Address2", "Address3", "Address4", "Address5", "Address6",
             "PostCode", "UPRN",
         ]
-        self.assertEqual(headers, expected_order,
-            f"Column order mismatch.\nExpected: {expected_order}\nGot:      {headers}")
+        # TTW core columns should come first in the correct order
+        self.assertEqual(headers[:len(ttw_core)], ttw_core,
+            f"TTW columns not in expected order.\nExpected: {ttw_core}\nGot:      {headers[:len(ttw_core)]}")
+        # Extra columns should follow
+        extras = headers[len(ttw_core):]
+        self.assertTrue(len(extras) > 0, "Extra input columns should be preserved")
 
     def test_register_plus_elections_column_order(self):
-        """Register+elections output should have core columns then election groups."""
+        """Register+elections output should have core + election columns first, then extras."""
         tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         tmp_out.close()
         rc, _, _ = run_clean(
@@ -617,7 +628,7 @@ class TestColumnOrder(unittest.TestCase):
         os.unlink(tmp_out.name)
         self.assertEqual(rc, 0)
 
-        expected_order = [
+        ttw_core = [
             "Elector No. Prefix", "Elector No.", "Elector No. Suffix", "Full Elector No.",
             "Surname", "Forename", "Middle Names",
             "Address1", "Address2", "Address3", "Address4", "Address5", "Address6",
@@ -625,7 +636,11 @@ class TestColumnOrder(unittest.TestCase):
             "2022 Green Voting Intention", "2022 Party", "2022 Voted",
             "2026 Green Voting Intention", "2026 Party", "2026 Postal Voter",
         ]
-        self.assertEqual(headers, expected_order)
+        # TTW + election columns should come first in the correct order
+        self.assertEqual(headers[:len(ttw_core)], ttw_core)
+        # Extra columns should follow
+        extras = headers[len(ttw_core):]
+        self.assertTrue(len(extras) > 0, "Extra input columns should be preserved")
 
 
 # ---------------------------------------------------------------------------
@@ -779,17 +794,17 @@ class TestElectionData(unittest.TestCase):
         self.assertNotIn("2026 Voted", self.headers)
 
     def test_voted_flag_normalized(self):
-        """Non-blank voted → 'v'."""
+        """Non-blank voted → 'Y'."""
         vote_green = [r for r in self.rows if r["Surname"] == "VoteGreen"]
         self.assertEqual(len(vote_green), 1)
-        self.assertEqual(vote_green[0]["2022 Voted"], "v")
+        self.assertEqual(vote_green[0]["2022 Voted"], "Y")
 
-    def test_voted_any_value_becomes_v(self):
-        """Any non-blank value → 'v'."""
+    def test_voted_any_value_becomes_Y(self):
+        """Any non-blank value → 'Y'."""
         voted_any = [r for r in self.rows if r["Surname"] == "VotedAny"]
         self.assertEqual(len(voted_any), 1)
-        self.assertEqual(voted_any[0]["2022 Voted"], "v")
-        self.assertEqual(voted_any[0]["2026 Postal Voter"], "v")
+        self.assertEqual(voted_any[0]["2022 Voted"], "Y")
+        self.assertEqual(voted_any[0]["2026 Postal Voter"], "Y")
 
     def test_blank_voted_stays_blank(self):
         """Blank voted should stay blank."""
@@ -1530,9 +1545,9 @@ class TestRealisticMessyData(unittest.TestCase):
     # --- SubHouse/House ---
 
     def test_subhouse_house_reported(self):
-        """SubHouse/House data should be reported but not in output."""
-        self.assertNotIn("SubHouse", self.headers)
-        self.assertNotIn("House", self.headers)
+        """SubHouse/House data should be reported and preserved in output."""
+        self.assertIn("SubHouse", self.headers)
+        self.assertIn("House", self.headers)
         self.assertIn("SubHouse", self.report_text)
         self.assertIn("Regency Court", self.report_text)
         self.assertIn("Kilburn Court", self.report_text)
@@ -1622,12 +1637,14 @@ class TestRealisticMessyData(unittest.TestCase):
         """Date of Attainment should be in output (since input has date data)."""
         self.assertIn("Date of Attainment", self.headers)
 
-    def test_no_council_columns_in_output(self):
-        """No council-specific columns should leak into output."""
-        council_only = {"ElectorTitle", "IERStatus", "FranchiseMarker",
-                        "RegisteredAddress1", "SubHouse", "House", "PDCode", "RollNo"}
-        leaked = council_only & set(self.headers)
-        self.assertEqual(leaked, set(), f"Council columns leaked: {leaked}")
+    def test_council_columns_preserved_in_output(self):
+        """Non-mapped council columns should be preserved in output by default."""
+        preserved = {"ElectorTitle", "IERStatus", "FranchiseMarker", "SubHouse", "House"}
+        for col in preserved:
+            self.assertIn(col, self.headers, f"Council column '{col}' should be preserved")
+        # FIELD_MAP source columns should NOT be in output (mapped to TTW names)
+        for col in ("RegisteredAddress1", "PDCode", "RollNo"):
+            self.assertNotIn(col, self.headers, f"Mapped column '{col}' should not appear")
 
     # --- Name normalization in realistic data ---
 
@@ -1810,9 +1827,9 @@ class TestEnrichedColumns(unittest.TestCase):
         return matches[0]
 
     def test_ge24_any_nonempty_becomes_voted(self):
-        """GE24='yes' -> Voted='v'."""
+        """GE24='yes' -> Voted='Y'."""
         row = self._get_row("Patel", "Raj")
-        self.assertEqual(row["GE2024 Voted"], "v")
+        self.assertEqual(row["GE2024 Voted"], "Y")
 
     def test_ge24_blank_no_voted(self):
         """Blank GE24 -> Voted=''."""
@@ -1884,12 +1901,35 @@ class TestEnrichedColumns(unittest.TestCase):
         gvi_warns = [w for _, w in warnings if "voting intention" in w.get("Issue", "").lower()]
         self.assertTrue(len(gvi_warns) >= 1)
 
-    def test_postal_voter_empty(self):
-        """Postal voter column on future election should be present but empty."""
+    def test_postal_voter_mapped(self):
+        """PostalVoter? values should map to LE2026 Postal Voter."""
         self.assertIn("LE2026 Postal Voter", self.headers)
-        for row in self.rows:
-            self.assertEqual(row["LE2026 Postal Voter"], "",
-                f"LE2026 Postal Voter should be empty, got {row['LE2026 Postal Voter']!r}")
+        # Rows with PostalVoter? set should have "Y"
+        patel_raj = self._get_row("Patel", "Raj")
+        self.assertEqual(patel_raj["LE2026 Postal Voter"], "Y")
+        johnson_david = self._get_row("Johnson", "David")
+        self.assertEqual(johnson_david["LE2026 Postal Voter"], "Y")
+        # Rows without PostalVoter? should be empty
+        smith = self._get_row("Smith", "John")
+        self.assertEqual(smith["LE2026 Postal Voter"], "")
+
+    def test_postal_voter_any_nonempty_becomes_Y(self):
+        """Any non-empty PostalVoter? value should become 'Y'."""
+        # Taylor has PostalVoter?="PV" -> should be "Y"
+        taylor = self._get_row("Taylor", "Sophie")
+        self.assertEqual(taylor["LE2026 Postal Voter"], "Y")
+        # Patel Priya has PostalVoter?="v" -> "Y"
+        priya = self._get_row("Patel", "Priya")
+        self.assertEqual(priya["LE2026 Postal Voter"], "Y")
+
+    def test_ppb_does_not_affect_postal_voter(self):
+        """P/PB column (Poster/Poster Board) should not map to Postal Voter."""
+        # P/PB is preserved as an extra column, not used for postal voter
+        self.assertIn("P/PB", self.headers)
+        # Jones has no PostalVoter? -> postal voter should be empty
+        # regardless of any P/PB value
+        jones = self._get_row("Jones", "Sarah")
+        self.assertEqual(jones["LE2026 Postal Voter"], "")
 
     def test_historic_election_no_gvi_party_columns(self):
         """Historic election should NOT have GVI or Party columns in enriched mode."""
@@ -1945,6 +1985,120 @@ class TestEnrichedColumns(unittest.TestCase):
         os.unlink(tmp_out.name)
         self.assertNotEqual(rc, 0, "Should error with 2 future elections")
         self.assertIn("future election", stderr.lower())
+
+
+# ---------------------------------------------------------------------------
+# Unrecognized Column Tests
+# ---------------------------------------------------------------------------
+
+class TestUnrecognizedColumns(unittest.TestCase):
+    """Test unrecognized input column detection and reporting."""
+
+    def test_unknown_column_in_report(self):
+        """Unknown input column should appear in QA report as unrecognized."""
+        # Create a CSV with one unknown column
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False,
+                                             newline="", encoding="utf-8")
+        import csv as csv_mod
+        writer = csv_mod.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+                         "RegisteredAddress1", "PostCode", "MysteryColumn"])
+        writer.writerow(["KG1", "1", "Test", "User", "1 Test St", "NW10 1AA", "hello"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+
+        try:
+            rc, _, _ = run_clean(tmp_in.name, tmp_out.name, report_file=tmp_report.name)
+            self.assertEqual(rc, 0)
+            report_text = Path(tmp_report.name).read_text(encoding="utf-8")
+            self.assertIn("Unrecognized Input Columns (preserved)", report_text)
+            self.assertIn("MysteryColumn", report_text)
+        finally:
+            os.unlink(tmp_in.name)
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
+
+    def test_full_name_lowercase_not_unrecognized(self):
+        """'Full name' (lowercase n) should be recognized via ENRICHMENT_DISCARD_COLUMNS."""
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False,
+                                             newline="", encoding="utf-8")
+        import csv as csv_mod
+        writer = csv_mod.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+                         "RegisteredAddress1", "PostCode", "Full name",
+                         "GE24", "Party", "1-5", "PostalVoter?"])
+        writer.writerow(["KG1", "1", "Test", "User", "1 Test St", "NW10 1AA",
+                         "User Test", "", "Green", "1", ""])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+
+        try:
+            rc, _, _ = run_clean(tmp_in.name, tmp_out.name,
+                                 extra_args=["--mode", "register+elections",
+                                             "--elections", "GE2024", "LE2026",
+                                             "--election-types", "historic", "future",
+                                             "--enriched-columns"],
+                                 report_file=tmp_report.name)
+            self.assertEqual(rc, 0)
+            report_text = Path(tmp_report.name).read_text(encoding="utf-8")
+            # "Full name" should NOT appear as unrecognized
+            if "Unrecognized Input Columns" in report_text:
+                self.assertNotIn("Full name", report_text)
+        finally:
+            os.unlink(tmp_in.name)
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
+
+    def test_enriched_no_false_positives(self):
+        """Standard enriched input should produce no unrecognized column warnings."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+
+        try:
+            rc, _, _ = run_clean(
+                TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+                extra_args=["--mode", "register+elections",
+                            "--elections", "GE2024", "LE2026",
+                            "--election-types", "historic", "future",
+                            "--enriched-columns"],
+                report_file=tmp_report.name)
+            self.assertEqual(rc, 0)
+            report_text = Path(tmp_report.name).read_text(encoding="utf-8")
+            self.assertNotIn("Unrecognized Input Columns", report_text)
+        finally:
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
+
+    def test_register_plus_elections_no_false_positives(self):
+        """Non-enriched register+elections should not flag election columns."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+
+        try:
+            rc, _, _ = run_clean(
+                TEST_DATA / "golden_input_register_plus_elections.csv", tmp_out.name,
+                extra_args=["--mode", "register+elections",
+                            "--elections", "2022", "2026",
+                            "--election-types", "historic", "future"],
+                report_file=tmp_report.name)
+            self.assertEqual(rc, 0)
+            report_text = Path(tmp_report.name).read_text(encoding="utf-8")
+            self.assertNotIn("Unrecognized Input Columns", report_text)
+        finally:
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
 
 
 # ---------------------------------------------------------------------------
@@ -2020,6 +2174,337 @@ class TestExtraColumns(unittest.TestCase):
         # Core + election columns should still be present
         self.assertIn("Elector No. Prefix", headers)
         self.assertIn("LE2026 Party", headers)
+
+
+# ---------------------------------------------------------------------------
+# Preserve-All-Columns Tests
+# ---------------------------------------------------------------------------
+
+class TestPreserveAllColumns(unittest.TestCase):
+    """Test that all input columns are preserved by default and --strip-extra works."""
+
+    def test_default_preserves_all_columns(self):
+        """Running with just input/output preserves all input columns in output."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
+            extra_args=[],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        # All council-only columns should be in output
+        for col in ["ElectorTitle", "IERStatus", "FranchiseMarker",
+                     "Euro", "Parl", "County", "Ward",
+                     "MethodOfVerification", "ElectorID"]:
+            self.assertIn(col, headers, f"Column '{col}' should be preserved by default")
+
+    def test_strip_extra_drops_non_ttw(self):
+        """--strip-extra produces only TTW columns (no extras)."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
+            extra_args=["--strip-extra"],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        # No council-only columns should remain
+        for col in ["ElectorTitle", "IERStatus", "FranchiseMarker",
+                     "Euro", "Parl", "County", "Ward",
+                     "MethodOfVerification", "ElectorID",
+                     "SubHouse", "House", "Suffix"]:
+            self.assertNotIn(col, headers, f"Column '{col}' should be stripped")
+        # Core TTW columns should still be present
+        self.assertIn("Elector No. Prefix", headers)
+        self.assertIn("PostCode", headers)
+
+    def test_strip_extra_without_enriched(self):
+        """--strip-extra works in plain register mode (no --enriched-columns)."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_plus_elections.csv", tmp_out.name,
+            extra_args=["--mode", "register+elections",
+                "--elections", "2022", "2026",
+                "--election-types", "historic", "future",
+                "--strip-extra",
+            ],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        # No council-only columns
+        for col in ["ElectorTitle", "IERStatus", "FranchiseMarker",
+                     "Euro", "Parl", "County", "Ward"]:
+            self.assertNotIn(col, headers, f"Column '{col}' should be stripped")
+        # Election columns should be present
+        self.assertIn("2022 Voted", headers)
+        self.assertIn("2026 Postal Voter", headers)
+
+    def test_enriched_source_consumed(self):
+        """With --enriched-columns, GE24/Party/1-5/PostalVoter? NOT in output."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=["--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        for col in ["GE24", "Party", "1-5", "PostalVoter?"]:
+            self.assertNotIn(col, headers,
+                f"Enrichment source column '{col}' should be consumed by mapping")
+
+    def test_enriched_extra_preserved(self):
+        """With --enriched-columns (no --strip-extra), Email/Phone/etc preserved."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=["--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        for col in ["Email Address", "Phone number", "Comments", "Issues"]:
+            self.assertIn(col, headers, f"Extra column '{col}' should be preserved")
+
+    def test_council_only_preserved(self):
+        """Euro, Parl, Ward, FranchiseMarker etc. in output by default."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "realistic_messy_council_data.csv", tmp_out.name,
+            extra_args=[],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        for col in ["Euro", "Parl", "Ward", "FranchiseMarker"]:
+            self.assertIn(col, headers, f"Council column '{col}' should be preserved")
+
+    def test_strip_extra_with_enriched(self):
+        """--enriched-columns --strip-extra -> only TTW + election columns."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "enriched_council_input.csv", tmp_out.name,
+            extra_args=["--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+                "--strip-extra",
+            ],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        # No extra columns
+        for col in ["Email Address", "Phone number", "Euro", "Parl",
+                     "Ward", "Full Name", "SubHouse", "House"]:
+            self.assertNotIn(col, headers, f"Column '{col}' should be stripped")
+        # TTW + election columns should still be present
+        self.assertIn("Elector No. Prefix", headers)
+        self.assertIn("GE2024 Voted", headers)
+        self.assertIn("LE2026 Party", headers)
+
+    def test_enrichment_detected_warning(self):
+        """Without --enriched-columns, stderr warns about GE24/Party/1-5."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        # Run without --enriched-columns on enriched data (no --quiet)
+        cmd = [sys.executable, str(TOOL),
+               str(TEST_DATA / "enriched_council_input.csv"), tmp_out.name]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        os.unlink(tmp_out.name)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Detected enrichment data columns", result.stderr)
+        self.assertIn("--enriched-columns", result.stderr)
+
+    def test_canvassing_detected_note(self):
+        """Canvassing data detected -> stderr note."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        cmd = [sys.executable, str(TOOL),
+               str(TEST_DATA / "enriched_council_input.csv"), tmp_out.name]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        os.unlink(tmp_out.name)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Detected canvassing data columns", result.stderr)
+
+    def test_no_enrichment_warning_when_enriched_set(self):
+        """With --enriched-columns, no enrichment warning."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        cmd = [sys.executable, str(TOOL),
+               str(TEST_DATA / "enriched_council_input.csv"), tmp_out.name,
+               "--mode", "register+elections",
+               "--elections", "GE2024", "LE2026",
+               "--election-types", "historic", "future",
+               "--enriched-columns"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        os.unlink(tmp_out.name)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn("Detected enrichment data columns", result.stderr)
+
+    def test_extra_columns_in_input_order(self):
+        """Extra columns appear at end of output in their original input order."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        rc, _, stderr = run_clean(
+            TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
+            extra_args=[],
+        )
+        self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+        headers, _ = read_output_csv(tmp_out.name)
+        os.unlink(tmp_out.name)
+        # Find positions of extra columns
+        extras = [h for h in headers if h in {"ElectorTitle", "IERStatus",
+                  "FranchiseMarker", "Euro", "Parl", "County", "Ward"}]
+        # The input order is: ElectorTitle, IERStatus, FranchiseMarker, Euro, Parl, County, Ward
+        expected_order = ["ElectorTitle", "IERStatus", "FranchiseMarker",
+                         "Euro", "Parl", "County", "Ward"]
+        self.assertEqual(extras, expected_order,
+            f"Extra columns should be in input order.\nExpected: {expected_order}\nGot: {extras}")
+
+    def test_ttw_named_input_column_no_overwrite(self):
+        """An input column named like a TTW output field should not overwrite mapped values."""
+        import csv as csv_mod
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False,
+                                             newline="", encoding="utf-8")
+        writer = csv_mod.writer(tmp_in)
+        # Input has a column literally named "Address1" alongside RegisteredAddress1
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+                         "RegisteredAddress1", "PostCode", "Address1"])
+        writer.writerow(["KG1", "1", "Test", "User", "42 Real Street", "NW10 1AA", "BOGUS"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+
+        try:
+            rc, _, _ = run_clean(tmp_in.name, tmp_out.name)
+            self.assertEqual(rc, 0)
+            headers, rows = read_output_csv(tmp_out.name)
+            # The mapped RegisteredAddress1 should win, not the raw "Address1" column
+            self.assertEqual(rows[0]["Address1"], "42 Real Street")
+            # "Address1" should not appear as a duplicate extra column
+            self.assertEqual(headers.count("Address1"), 1)
+        finally:
+            os.unlink(tmp_in.name)
+            os.unlink(tmp_out.name)
+
+    def test_ttw_named_column_without_source_preserved(self):
+        """An input column named 'Address2' should be preserved when RegisteredAddress2 is absent."""
+        import csv as csv_mod
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False,
+                                             newline="", encoding="utf-8")
+        writer = csv_mod.writer(tmp_in)
+        # Input uses "Address2" directly (no RegisteredAddress2)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+                         "RegisteredAddress1", "PostCode", "Address2"])
+        writer.writerow(["KG1", "1", "Test", "User", "42 Real Street", "NW10 1AA", "London"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+
+        try:
+            rc, _, _ = run_clean(tmp_in.name, tmp_out.name)
+            self.assertEqual(rc, 0)
+            headers, rows = read_output_csv(tmp_out.name)
+            # Address2 data should NOT be silently dropped
+            self.assertEqual(rows[0]["Address2"], "London",
+                "Address2 data should be preserved when RegisteredAddress2 is not in input")
+        finally:
+            os.unlink(tmp_in.name)
+            os.unlink(tmp_out.name)
+
+    def test_strip_extra_discarded_in_report(self):
+        """--strip-extra should list discarded columns in QA report."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+
+        try:
+            rc, _, _ = run_clean(
+                TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
+                extra_args=["--strip-extra"],
+                report_file=tmp_report.name,
+            )
+            self.assertEqual(rc, 0)
+            report_text = Path(tmp_report.name).read_text(encoding="utf-8")
+            self.assertIn("Discarded columns", report_text)
+            self.assertIn("ElectorTitle", report_text)
+        finally:
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
+
+    def test_unrecognized_column_data_in_output(self):
+        """Unrecognized column values should appear in output CSV rows."""
+        import csv as csv_mod
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False,
+                                             newline="", encoding="utf-8")
+        writer = csv_mod.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+                         "RegisteredAddress1", "PostCode", "MysteryColumn"])
+        writer.writerow(["KG1", "1", "Test", "User", "1 Test St", "NW10 1AA", "hello"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+
+        try:
+            rc, _, _ = run_clean(tmp_in.name, tmp_out.name)
+            self.assertEqual(rc, 0)
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("MysteryColumn", headers)
+            self.assertEqual(rows[0]["MysteryColumn"], "hello")
+        finally:
+            os.unlink(tmp_in.name)
+            os.unlink(tmp_out.name)
+
+    def test_strip_extra_unrecognized_report_label(self):
+        """With --strip-extra, report should label unrecognized columns as 'stripped'."""
+        import csv as csv_mod
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False,
+                                             newline="", encoding="utf-8")
+        writer = csv_mod.writer(tmp_in)
+        writer.writerow(["PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+                         "RegisteredAddress1", "PostCode", "MysteryColumn"])
+        writer.writerow(["KG1", "1", "Test", "User", "1 Test St", "NW10 1AA", "hello"])
+        tmp_in.close()
+
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+
+        try:
+            rc, _, _ = run_clean(tmp_in.name, tmp_out.name,
+                                 extra_args=["--strip-extra"],
+                                 report_file=tmp_report.name)
+            self.assertEqual(rc, 0)
+            report_text = Path(tmp_report.name).read_text(encoding="utf-8")
+            self.assertIn("Unrecognized Input Columns (stripped)", report_text)
+            self.assertNotIn("Unrecognized Input Columns (preserved)", report_text)
+        finally:
+            os.unlink(tmp_in.name)
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
 
 
 # ---------------------------------------------------------------------------
@@ -2179,6 +2664,195 @@ class TestEnrichedGoldenFile(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Dataset 1 Golden File Test (Full Name uppercase, no PostalVoter?)
+# ---------------------------------------------------------------------------
+
+class TestDataset1GoldenFile(unittest.TestCase):
+    """Test Dataset 1 format: council+enrichment with Full Name, no PostalVoter?."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_output = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        cls.tmp_output.close()
+        cls.tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        cls.tmp_report.close()
+
+        cls.rc, _, cls.stderr = run_clean(
+            TEST_DATA / "dataset1_input.csv", cls.tmp_output.name,
+            extra_args=["--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+            report_file=cls.tmp_report.name,
+        )
+        cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
+        cls.report_text, cls.machine = read_report(cls.tmp_report.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.tmp_output.name)
+        os.unlink(cls.tmp_report.name)
+
+    def _get_row(self, surname, forename=None):
+        matches = [r for r in self.rows if r["Surname"] == surname]
+        if forename:
+            matches = [r for r in matches if r["Forename"] == forename]
+        self.assertTrue(len(matches) >= 1, f"Row {surname}/{forename} not found")
+        return matches[0]
+
+    def test_exit_code_zero(self):
+        self.assertEqual(self.rc, 0, f"Failed:\n{self.stderr}")
+
+    def test_field_level_match(self):
+        """Output matches golden expected file field-by-field."""
+        exp_h, exp_r = read_output_csv(TEST_DATA / "dataset1_expected.csv")
+        got_h, got_r = read_output_csv(self.tmp_output.name)
+        self.assertEqual(exp_h, got_h)
+        self.assertEqual(len(exp_r), len(got_r))
+        for i, (exp, got) in enumerate(zip(exp_r, got_r)):
+            for col in exp_h:
+                self.assertEqual(exp.get(col, ""), got.get(col, ""),
+                    f"Row {i+1}, column '{col}': expected {repr(exp.get(col, ''))}, "
+                    f"got {repr(got.get(col, ''))}")
+
+    def test_voted_Y_format(self):
+        """GE24='yes' -> GE2024 Voted='Y' (not 'v')."""
+        smith = self._get_row("Smith", "John")
+        self.assertEqual(smith["GE2024 Voted"], "Y")
+
+    def test_voted_N_becomes_blank(self):
+        """GE24='N' -> GE2024 Voted='' (explicit no)."""
+        priya = self._get_row("Patel", "Priya")
+        self.assertEqual(priya["GE2024 Voted"], "")
+
+    def test_postal_voter_blank_without_source(self):
+        """No PostalVoter? column -> LE2026 Postal Voter always blank."""
+        for row in self.rows:
+            self.assertEqual(row["LE2026 Postal Voter"], "",
+                f"{row['Surname']}: Postal Voter should be blank, got {row['LE2026 Postal Voter']!r}")
+
+    def test_ppb_preserved(self):
+        """P/PB values pass through as extra columns."""
+        patel = self._get_row("Patel", "Raj")
+        self.assertEqual(patel["P/PB"], "P")
+        brown = self._get_row("Brown", "Michael")
+        self.assertEqual(brown["P/PB"], "PB")
+
+    def test_dnk_preserved(self):
+        """DNK values pass through."""
+        jones = self._get_row("Jones", "Sarah")
+        self.assertEqual(jones["DNK"], "Do not knock")
+
+    def test_no_unrecognized_columns(self):
+        """No unrecognized column warnings in report."""
+        self.assertNotIn("Unrecognized Input Columns", self.report_text)
+
+    def test_one_deletion(self):
+        """Ghost NoAddress row deleted."""
+        deletions = [l for l in self.machine if l.startswith("DELETED")]
+        self.assertEqual(len(deletions), 1)
+
+
+# ---------------------------------------------------------------------------
+# Dataset 2 Golden File Test (Full name lowercase, with PostalVoter?)
+# ---------------------------------------------------------------------------
+
+class TestDataset2GoldenFile(unittest.TestCase):
+    """Test Dataset 2 format: enrichment with PostalVoter?, Full name lowercase."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_output = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        cls.tmp_output.close()
+        cls.tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        cls.tmp_report.close()
+
+        cls.rc, _, cls.stderr = run_clean(
+            TEST_DATA / "dataset2_input.csv", cls.tmp_output.name,
+            extra_args=["--mode", "register+elections",
+                "--elections", "GE2024", "LE2026",
+                "--election-types", "historic", "future",
+                "--enriched-columns",
+            ],
+            report_file=cls.tmp_report.name,
+        )
+        cls.headers, cls.rows = read_output_csv(cls.tmp_output.name)
+        cls.report_text, cls.machine = read_report(cls.tmp_report.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        os.unlink(cls.tmp_output.name)
+        os.unlink(cls.tmp_report.name)
+
+    def _get_row(self, surname, forename=None):
+        matches = [r for r in self.rows if r["Surname"] == surname]
+        if forename:
+            matches = [r for r in matches if r["Forename"] == forename]
+        self.assertTrue(len(matches) >= 1, f"Row {surname}/{forename} not found")
+        return matches[0]
+
+    def test_exit_code_zero(self):
+        self.assertEqual(self.rc, 0, f"Failed:\n{self.stderr}")
+
+    def test_field_level_match(self):
+        """Output matches golden expected file field-by-field."""
+        exp_h, exp_r = read_output_csv(TEST_DATA / "dataset2_expected.csv")
+        got_h, got_r = read_output_csv(self.tmp_output.name)
+        self.assertEqual(exp_h, got_h)
+        self.assertEqual(len(exp_r), len(got_r))
+        for i, (exp, got) in enumerate(zip(exp_r, got_r)):
+            for col in exp_h:
+                self.assertEqual(exp.get(col, ""), got.get(col, ""),
+                    f"Row {i+1}, column '{col}': expected {repr(exp.get(col, ''))}, "
+                    f"got {repr(got.get(col, ''))}")
+
+    def test_postal_voter_yes_becomes_Y(self):
+        """PostalVoter?='Yes' -> LE2026 Postal Voter='Y'."""
+        patel = self._get_row("Patel", "Raj")
+        self.assertEqual(patel["LE2026 Postal Voter"], "Y")
+
+    def test_postal_voter_v_becomes_Y(self):
+        """PostalVoter?='v' -> LE2026 Postal Voter='Y'."""
+        brown = self._get_row("Brown", "Michael")
+        self.assertEqual(brown["LE2026 Postal Voter"], "Y")
+
+    def test_postal_voter_No_becomes_blank(self):
+        """PostalVoter?='No' -> LE2026 Postal Voter='' (explicit no)."""
+        priya = self._get_row("Patel", "Priya")
+        self.assertEqual(priya["LE2026 Postal Voter"], "")
+
+    def test_postal_voter_N_becomes_blank(self):
+        """PostalVoter?='N' -> LE2026 Postal Voter='' (explicit no)."""
+        garcia = self._get_row("Garcia-Lopez", "Maria")
+        self.assertEqual(garcia["LE2026 Postal Voter"], "")
+
+    def test_voted_N_becomes_blank(self):
+        """GE24='N' -> GE2024 Voted='' (explicit no)."""
+        priya = self._get_row("Patel", "Priya")
+        self.assertEqual(priya["GE2024 Voted"], "")
+
+    def test_voted_yes_becomes_Y(self):
+        """GE24='yes' -> GE2024 Voted='Y'."""
+        smith = self._get_row("Smith", "John")
+        self.assertEqual(smith["GE2024 Voted"], "Y")
+
+    def test_full_name_lowercase_not_unrecognized(self):
+        """'Full name' (lowercase n) should not trigger unrecognized warning."""
+        self.assertNotIn("Unrecognized Input Columns", self.report_text)
+
+    def test_no_identifier_columns(self):
+        """Dataset 2 has no Identifier/Address Identifier columns."""
+        self.assertNotIn("Identifier", self.headers)
+        self.assertNotIn("Address Identifier", self.headers)
+
+    def test_one_deletion(self):
+        """Ghost NoAddress row deleted."""
+        deletions = [l for l in self.machine if l.startswith("DELETED")]
+        self.assertEqual(len(deletions), 1)
+
+
+# ---------------------------------------------------------------------------
 # User Verification Mode
 # ---------------------------------------------------------------------------
 
@@ -2264,6 +2938,70 @@ def run_verification(args):
         report("pass", "Unique Elector Numbers", f"All {len(out_rows)} Full Elector No. values unique")
     else:
         report("fail", "Unique Elector Numbers", f"{len(dups)} duplicates")
+
+    # Check election field values are in TTW format
+    election_cols = [h for h in out_headers if h.endswith(" Voted")]
+    bad_voted = []
+    for i, r in enumerate(out_rows):
+        for col in election_cols:
+            val = r.get(col, "").strip()
+            if val and val != "Y":
+                bad_voted.append((i + 2, col, val))
+    if election_cols:
+        if not bad_voted:
+            report("pass", "Voted Values", "All Voted values are 'Y' or blank")
+        else:
+            report("fail", "Voted Values",
+                f"{len(bad_voted)} invalid (expected 'Y' or blank, "
+                f"first: row {bad_voted[0][0]} {bad_voted[0][1]}='{bad_voted[0][2]}')")
+
+    postal_cols = [h for h in out_headers if h.endswith(" Postal Voter")]
+    bad_postal = []
+    for i, r in enumerate(out_rows):
+        for col in postal_cols:
+            val = r.get(col, "").strip()
+            if val and val != "Y":
+                bad_postal.append((i + 2, col, val))
+    if postal_cols:
+        if not bad_postal:
+            report("pass", "Postal Voter Values", "All Postal Voter values are 'Y' or blank")
+        else:
+            report("fail", "Postal Voter Values",
+                f"{len(bad_postal)} invalid (expected 'Y' or blank, "
+                f"first: row {bad_postal[0][0]} {bad_postal[0][1]}='{bad_postal[0][2]}')")
+
+    party_cols = [h for h in out_headers if h.endswith(" Party")]
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from ttw_common import VALID_PARTY_CODES
+    bad_party = []
+    for i, r in enumerate(out_rows):
+        for col in party_cols:
+            val = r.get(col, "").strip()
+            if val and val not in VALID_PARTY_CODES:
+                bad_party.append((i + 2, col, val))
+    if party_cols:
+        if not bad_party:
+            report("pass", "Party Codes", "All Party values are valid TTW codes or blank")
+        else:
+            report("warn", "Party Codes",
+                f"{len(bad_party)} unrecognized code(s) "
+                f"(first: row {bad_party[0][0]} {bad_party[0][1]}='{bad_party[0][2]}')")
+
+    gvi_cols = [h for h in out_headers if h.endswith(" Green Voting Intention")]
+    valid_gvi = {"1", "2", "3", "4", "5", ""}
+    bad_gvi = []
+    for i, r in enumerate(out_rows):
+        for col in gvi_cols:
+            val = r.get(col, "").strip()
+            if val not in valid_gvi:
+                bad_gvi.append((i + 2, col, val))
+    if gvi_cols:
+        if not bad_gvi:
+            report("pass", "Voting Intention", "All GVI values are 1-5 or blank")
+        else:
+            report("fail", "Voting Intention",
+                f"{len(bad_gvi)} invalid (expected 1-5 or blank, "
+                f"first: row {bad_gvi[0][0]} {bad_gvi[0][1]}='{bad_gvi[0][2]}')")
 
     # Check no empty rows
     empty_rows = [i + 2 for i, r in enumerate(out_rows)
@@ -2355,6 +3093,635 @@ def run_verification(args):
           f"{results['fail']} failed, {results['warn']} warnings")
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Column Alias Tests
+# ---------------------------------------------------------------------------
+
+class TestColumnAliases(unittest.TestCase):
+    """Test automatic column name alias resolution."""
+
+    # Minimal council-format CSV using TTW-style names (Address1 instead of RegisteredAddress1)
+    TTW_STYLE_HEADERS = "Address1,Forename,Surname,PostCode,PDCode,RollNo"
+    TTW_STYLE_ROW = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+
+    def _write_csv(self, header_line, data_lines):
+        """Write a temp CSV with given headers and data lines. Returns path."""
+        tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w",
+                                          encoding="utf-8", newline="")
+        tmp.write(header_line + "\n")
+        if isinstance(data_lines, str):
+            data_lines = [data_lines]
+        for line in data_lines:
+            tmp.write(line + "\n")
+        tmp.close()
+        return tmp.name
+
+    def test_alias_address1_to_registered_address1(self):
+        """Input with 'Address1' (no 'RegisteredAddress1') maps to RegisteredAddress1."""
+        inp = self._write_csv(self.TTW_STYLE_HEADERS, self.TTW_STYLE_ROW)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            # TTW output should have Address1 (the TTW output name from FIELD_MAP)
+            self.assertIn("Address1", headers)
+            self.assertEqual(rows[0]["Address1"], "42 Chamberlayne Rd")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_forename_to_elector_forename(self):
+        """Input with 'Forename' (no 'ElectorForename') maps correctly."""
+        inp = self._write_csv(self.TTW_STYLE_HEADERS, self.TTW_STYLE_ROW)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("Forename", headers)
+            self.assertEqual(rows[0]["Forename"], "John")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_case_insensitive(self):
+        """address1, ADDRESS1, Address1 all resolve to RegisteredAddress1."""
+        for variant in ["address1", "ADDRESS1", "Address1"]:
+            header = f"{variant},Forename,Surname,PostCode,PDCode,RollNo"
+            inp = self._write_csv(header, self.TTW_STYLE_ROW)
+            tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+            tmp_out.close()
+            try:
+                rc, _, stderr = run_clean(inp, tmp_out.name)
+                self.assertEqual(rc, 0, f"Failed with '{variant}':\n{stderr}")
+                headers, rows = read_output_csv(tmp_out.name)
+                self.assertIn("Address1", headers,
+                              f"Address1 missing in output with input '{variant}'")
+            finally:
+                os.unlink(inp)
+                os.unlink(tmp_out.name)
+
+    def test_alias_with_spaces(self):
+        """'Post Code', 'First Name', 'Address 1' all resolve."""
+        header = "Address 1,First Name,Last Name,Post Code,PD Code,Roll No"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("PostCode", headers)
+            self.assertEqual(rows[0]["PostCode"], "NW10 3JU")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_with_underscores(self):
+        """'Post_Code', 'First_Name', 'Registered_Address_1' all resolve."""
+        header = "Registered_Address_1,First_Name,Last_Name,Post_Code,PD_Code,Roll_No"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("PostCode", headers)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_council_name_wins(self):
+        """If both RegisteredAddress1 and Address1 exist, RegisteredAddress1 is used."""
+        header = "RegisteredAddress1,Address1,ElectorForename,ElectorSurname,PostCode,PDCode,RollNo"
+        row = "Council Addr,TTW Addr,John,Smith,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            # Address1 in output should come from RegisteredAddress1 (the council name)
+            self.assertEqual(rows[0]["Address1"], "Council Addr")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_log_in_report(self):
+        """Alias resolutions appear in QA report."""
+        inp = self._write_csv(self.TTW_STYLE_HEADERS, self.TTW_STYLE_ROW)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+        try:
+            rc, _, _ = run_clean(inp, tmp_out.name, report_file=tmp_report.name)
+            self.assertEqual(rc, 0)
+            report_text = Path(tmp_report.name).read_text()
+            self.assertIn("Column Aliases Resolved", report_text)
+            # "Address1" should be logged as resolved to "RegisteredAddress1"
+            self.assertIn("'Address1' -> 'RegisteredAddress1'", report_text)
+            self.assertIn("'Forename' -> 'ElectorForename'", report_text)
+            self.assertIn("'Surname' -> 'ElectorSurname'", report_text)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
+
+    def test_alias_log_stderr(self):
+        """Alias resolutions printed to stderr when not --quiet."""
+        inp = self._write_csv(self.TTW_STYLE_HEADERS, self.TTW_STYLE_ROW)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            # Run WITHOUT --quiet (override run_clean's default)
+            cmd = [sys.executable, str(TOOL), inp, tmp_out.name]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, f"Failed:\n{result.stderr}")
+            self.assertIn("Resolved", result.stderr)
+            self.assertIn("'Address1' -> 'RegisteredAddress1'", result.stderr)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_no_aliases_flag(self):
+        """--no-aliases disables alias resolution, causing validation failure."""
+        inp = self._write_csv(self.TTW_STYLE_HEADERS, self.TTW_STYLE_ROW)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name, extra_args=["--no-aliases"])
+            # Should fail because 'Address1' is not 'RegisteredAddress1'
+            self.assertNotEqual(rc, 0, "Should fail without alias resolution")
+            self.assertIn("Missing required columns", stderr)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_full_ttw_input(self):
+        """Input using all TTW-style names passes validation after alias resolution."""
+        header = ("Address1,Address2,Address3,Address4,Address5,Address6,"
+                  "Forename,Middle Names,Surname,PostCode,PDCode,RollNo,"
+                  "Date of Attainment,UPRN,Suffix")
+        row = ("42 Chamberlayne Rd,London,,,,,"
+               "John,,Smith,NW10 3JU,KG1,1,"
+               "01/01/2000,123456789,")
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            # All core TTW output fields should be present
+            self.assertIn("Elector No. Prefix", headers)
+            self.assertIn("Elector No.", headers)
+            self.assertIn("Address1", headers)
+            self.assertIn("Forename", headers)
+            self.assertIn("PostCode", headers)
+            self.assertEqual(rows[0]["Forename"], "John")
+            self.assertEqual(rows[0]["Surname"], "Smith")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_existing_golden_input_unaffected(self):
+        """Golden input with exact council names should not trigger any alias renames."""
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+        try:
+            rc, _, stderr = run_clean(
+                TEST_DATA / "golden_input_register_only.csv", tmp_out.name,
+                report_file=tmp_report.name,
+            )
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            report_text = Path(tmp_report.name).read_text()
+            # No alias resolution should appear in the report
+            self.assertNotIn("Column Aliases Resolved", report_text)
+        finally:
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
+
+    def test_alias_with_hyphens(self):
+        """Hyphenated column names: 'Post-Code', 'First-Name', 'Registered-Address-1'."""
+        header = "Registered-Address-1,First-Name,Last-Name,Post-Code,PD-Code,Roll-No"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("PostCode", headers)
+            self.assertIn("Address1", headers)
+            self.assertEqual(rows[0]["PostCode"], "NW10 3JU")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_with_dots(self):
+        """Dot-containing column names are normalized (dots stripped during matching)."""
+        # Use non-TTW-indicator names with dots to test dot stripping
+        header = "Reg.Address.1,Elector.Forename,Elector.Surname,Post.Code,P.D.Code,Roll.No"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("Address1", headers)
+            self.assertIn("PostCode", headers)
+            self.assertEqual(rows[0]["PostCode"], "NW10 3JU")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_address2_through_6(self):
+        """TTW-style Address2-Address6 all resolve to RegisteredAddress2-6."""
+        header = "Address1,Address2,Address3,Address4,Address5,Address6,Forename,Surname,PostCode,PDCode,RollNo"
+        row = "42 Chamberlayne Rd,London,Brent,,,,,John,Smith,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        tmp_report = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        tmp_report.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name, report_file=tmp_report.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            report_text = Path(tmp_report.name).read_text()
+            # Verify all Address aliases were resolved
+            self.assertIn("'Address1' -> 'RegisteredAddress1'", report_text)
+            self.assertIn("'Address2' -> 'RegisteredAddress2'", report_text)
+            self.assertIn("'Address3' -> 'RegisteredAddress3'", report_text)
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("Address1", headers)
+            self.assertIn("Address2", headers)
+            self.assertEqual(rows[0]["Address1"], "42 Chamberlayne Rd")
+            self.assertEqual(rows[0]["Address2"], "London")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+            os.unlink(tmp_report.name)
+
+    def test_alias_informal_canvasser_names(self):
+        """Informal names: 'Given Name', 'Family Name', 'Polling District', 'Roll Number'."""
+        header = "Given Name,Family Name,Polling District,Roll Number,Address1,Post Code"
+        row = "John,Smith,KG1,1,42 Chamberlayne Rd,NW10 3JU"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("Forename", headers)
+            self.assertIn("Surname", headers)
+            self.assertEqual(rows[0]["Forename"], "John")
+            self.assertEqual(rows[0]["Surname"], "Smith")
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_postcode_one_word(self):
+        """'Postcode' (one word, various casings) resolves to PostCode."""
+        for variant in ["Postcode", "postcode", "POSTCODE"]:
+            header = f"Address1,Forename,Surname,{variant},PDCode,RollNo"
+            row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+            inp = self._write_csv(header, row)
+            tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+            tmp_out.close()
+            try:
+                rc, _, stderr = run_clean(inp, tmp_out.name)
+                self.assertEqual(rc, 0, f"Failed with '{variant}':\n{stderr}")
+                headers, rows = read_output_csv(tmp_out.name)
+                self.assertIn("PostCode", headers,
+                              f"PostCode missing with input '{variant}'")
+                self.assertEqual(rows[0]["PostCode"], "NW10 3JU")
+            finally:
+                os.unlink(inp)
+                os.unlink(tmp_out.name)
+
+    def test_alias_leading_trailing_whitespace(self):
+        """Column names with leading/trailing whitespace resolve correctly."""
+        header = " Address1 , Forename , Surname , PostCode , PDCode , RollNo "
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            # Should have resolved the whitespace-padded names
+            self.assertIn("PostCode", headers)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_duplicate_collision_keeps_first(self):
+        """When two aliases map to same canonical, first one wins, second passes through."""
+        header = "Forename,First Name,Surname,Address1,PostCode,PDCode,RollNo"
+        row = "John,Jonathan,Smith,42 Chamberlayne Rd,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            # "Forename" maps to ElectorForename (and gets output as "Forename")
+            self.assertIn("Forename", headers)
+            self.assertEqual(rows[0]["Forename"], "John")
+            # "First Name" should pass through as extra since ElectorForename is taken
+            self.assertIn("First Name", headers)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_duplicate_collision_stderr_warning(self):
+        """Duplicate alias collision prints a warning to stderr."""
+        header = "Forename,First Name,Surname,Address1,PostCode,PDCode,RollNo"
+        row = "John,Jonathan,Smith,42 Chamberlayne Rd,NW10 3JU,KG1,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            # Run WITHOUT --quiet to see stderr warnings
+            cmd = [sys.executable, str(TOOL), inp, tmp_out.name]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, f"Failed:\n{result.stderr}")
+            self.assertIn("also maps to", result.stderr)
+            self.assertIn("First Name", result.stderr)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_mixed_separators(self):
+        """Mixed separators within a column name: 'Registered_Address 1', 'Elector-No Prefix'."""
+        header = "Registered_Address 1,Elector-No Prefix,Post_Code,Elector Forename,Elector_Surname,Roll_No"
+        row = "42 Chamberlayne Rd,KG1,NW10 3JU,John,Smith,1"
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn("PostCode", headers)
+            self.assertIn("Forename", headers)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+
+# ---------------------------------------------------------------------------
+# Unit Tests: _norm_col() and resolve_aliases()
+# ---------------------------------------------------------------------------
+
+class TestNormCol(unittest.TestCase):
+    """Unit tests for _norm_col() normalization function."""
+
+    def test_lowercase(self):
+        self.assertEqual(_norm_col("PostCode"), "postcode")
+
+    def test_strip_spaces(self):
+        self.assertEqual(_norm_col("Post Code"), "postcode")
+
+    def test_strip_underscores(self):
+        self.assertEqual(_norm_col("Post_Code"), "postcode")
+
+    def test_strip_hyphens(self):
+        self.assertEqual(_norm_col("Post-Code"), "postcode")
+
+    def test_strip_dots(self):
+        self.assertEqual(_norm_col("Elector No."), "electorno")
+        self.assertEqual(_norm_col("Elector No. Prefix"), "electornoprefix")
+
+    def test_strip_mixed_separators(self):
+        self.assertEqual(_norm_col("Registered_Address 1"), "registeredaddress1")
+        self.assertEqual(_norm_col("Elector-No. Prefix"), "electornoprefix")
+
+    def test_leading_trailing_whitespace(self):
+        self.assertEqual(_norm_col("  PostCode  "), "postcode")
+        self.assertEqual(_norm_col(" Address1 "), "address1")
+
+    def test_empty_string(self):
+        self.assertEqual(_norm_col(""), "")
+
+    def test_only_separators(self):
+        """Strings of only dots/spaces/underscores/hyphens normalize to empty."""
+        self.assertEqual(_norm_col("..."), "")
+        self.assertEqual(_norm_col("___"), "")
+        self.assertEqual(_norm_col("   "), "")
+        self.assertEqual(_norm_col("-.-_"), "")
+
+    def test_all_uppercase(self):
+        self.assertEqual(_norm_col("POSTCODE"), "postcode")
+
+    def test_consecutive_separators(self):
+        self.assertEqual(_norm_col("Post__Code"), "postcode")
+        self.assertEqual(_norm_col("Post - Code"), "postcode")
+
+
+class TestResolveAliasesUnit(unittest.TestCase):
+    """Unit tests for resolve_aliases() function."""
+
+    def test_no_aliases_needed(self):
+        """Headers that are already canonical produce no renames."""
+        headers = ["PDCode", "RollNo", "ElectorForename", "ElectorSurname",
+                    "RegisteredAddress1", "PostCode"]
+        new_headers, log = resolve_aliases(headers, quiet=True)
+        self.assertEqual(new_headers, headers)
+        self.assertEqual(log, [])
+
+    def test_basic_rename(self):
+        """TTW-style names get renamed to canonical."""
+        headers = ["Address1", "Forename", "Surname", "PostCode", "PDCode", "RollNo"]
+        new_headers, log = resolve_aliases(headers, quiet=True)
+        self.assertIn("RegisteredAddress1", new_headers)
+        self.assertIn("ElectorForename", new_headers)
+        self.assertIn("ElectorSurname", new_headers)
+        self.assertEqual(len(log), 3)  # Address1, Forename, Surname
+
+    def test_canonical_takes_precedence(self):
+        """If canonical name already present, alias is not renamed."""
+        headers = ["RegisteredAddress1", "Address1", "ElectorForename", "ElectorSurname",
+                    "PostCode", "PDCode", "RollNo"]
+        new_headers, log = resolve_aliases(headers, quiet=True)
+        # Address1 should NOT be renamed because RegisteredAddress1 already present
+        self.assertEqual(new_headers[0], "RegisteredAddress1")
+        self.assertEqual(new_headers[1], "Address1")
+        rename_targets = [canon for _, canon in log]
+        self.assertNotIn("RegisteredAddress1", rename_targets)
+
+    def test_duplicate_alias_not_renamed(self):
+        """Second alias for same canonical passes through unrenamed."""
+        headers = ["Forename", "First Name", "Surname", "Address1", "PostCode",
+                    "PDCode", "RollNo"]
+        new_headers, log = resolve_aliases(headers, quiet=True)
+        # Forename -> ElectorForename (renamed)
+        self.assertEqual(new_headers[0], "ElectorForename")
+        # First Name stays as-is (ElectorForename already claimed)
+        self.assertEqual(new_headers[1], "First Name")
+
+    def test_case_insensitive_matching(self):
+        headers = ["address1", "FORENAME", "Surname", "postcode", "pdcode", "rollno"]
+        new_headers, log = resolve_aliases(headers, quiet=True)
+        self.assertIn("RegisteredAddress1", new_headers)
+        self.assertIn("ElectorForename", new_headers)
+        self.assertIn("PostCode", new_headers)
+        self.assertIn("PDCode", new_headers)
+
+
+# ---------------------------------------------------------------------------
+# Tests for Untested Alias Entries
+# ---------------------------------------------------------------------------
+
+class TestAliasEntries(unittest.TestCase):
+    """Verify specific alias entries that weren't covered by TestColumnAliases."""
+
+    TTW_STYLE_ROW = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+    BASE_HEADER_SUFFIX = ",Forename,Surname,PostCode,PDCode,RollNo"
+
+    def _write_csv(self, header_line, data_lines):
+        tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w",
+                                          encoding="utf-8", newline="")
+        tmp.write(header_line + "\n")
+        if isinstance(data_lines, str):
+            data_lines = [data_lines]
+        for line in data_lines:
+            tmp.write(line + "\n")
+        tmp.close()
+        return tmp.name
+
+    def _run_and_check(self, header, row, expected_output_col, expected_value=None):
+        """Run clean_register and verify a specific output column exists."""
+        inp = self._write_csv(header, row)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(inp, tmp_out.name)
+            self.assertEqual(rc, 0, f"Failed:\n{stderr}")
+            headers, rows = read_output_csv(tmp_out.name)
+            self.assertIn(expected_output_col, headers,
+                          f"Expected '{expected_output_col}' in output headers")
+            if expected_value is not None:
+                self.assertEqual(rows[0][expected_output_col], expected_value)
+        finally:
+            os.unlink(inp)
+            os.unlink(tmp_out.name)
+
+    def test_alias_doa_to_date_of_attainment(self):
+        """'DOA' resolves to DateOfAttainment."""
+        header = "Address1,Forename,Surname,PostCode,PDCode,RollNo,DOA"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1,01/01/2000"
+        self._run_and_check(header, row, "Date of Attainment", "01/01/2000")
+
+    def test_alias_dateattained_to_date_of_attainment(self):
+        """'Date Attained' resolves to DateOfAttainment."""
+        header = "Address1,Forename,Surname,PostCode,PDCode,RollNo,Date Attained"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1,15/06/2005"
+        self._run_and_check(header, row, "Date of Attainment", "15/06/2005")
+
+    def test_alias_attainmentdate_to_date_of_attainment(self):
+        """'Attainment Date' resolves to DateOfAttainment."""
+        header = "Address1,Forename,Surname,PostCode,PDCode,RollNo,Attainment Date"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1,25/12/2010"
+        self._run_and_check(header, row, "Date of Attainment", "25/12/2010")
+
+    def test_alias_middlename_to_elector_middlename(self):
+        """'Middle Name' resolves to ElectorMiddleName."""
+        header = "Address1,Forename,Surname,PostCode,PDCode,RollNo,Middle Name"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1,William"
+        self._run_and_check(header, row, "Middle Names", "William")
+
+    def test_alias_middlenames_to_elector_middlename(self):
+        """'Middle Names' resolves to ElectorMiddleName."""
+        header = "Address1,Forename,Surname,PostCode,PDCode,RollNo,Middle Names"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1,William James"
+        self._run_and_check(header, row, "Middle Names", "William James")
+
+    def test_alias_electorid(self):
+        """'Elector ID' resolves to ElectorID (council-only column, preserved)."""
+        header = "Address1,Forename,Surname,PostCode,PDCode,RollNo,Elector ID"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1,E12345"
+        self._run_and_check(header, row, "ElectorID", "E12345")
+
+    def test_alias_zipcode_to_postcode(self):
+        """'Zip Code' resolves to PostCode."""
+        header = "Address1,Forename,Surname,Zip Code,PDCode,RollNo"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        self._run_and_check(header, row, "PostCode", "NW10 3JU")
+
+    def test_alias_regaddress1(self):
+        """'Reg Address 1' resolves to RegisteredAddress1."""
+        header = "Reg Address 1,Forename,Surname,PostCode,PDCode,RollNo"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        self._run_and_check(header, row, "Address1", "42 Chamberlayne Rd")
+
+    def test_alias_regaddress2(self):
+        """'Reg. Address 2' resolves to RegisteredAddress2."""
+        header = "Address1,Reg. Address 2,Forename,Surname,PostCode,PDCode,RollNo"
+        row = "42 Chamberlayne Rd,London,John,Smith,NW10 3JU,KG1,1"
+        self._run_and_check(header, row, "Address2", "London")
+
+    def test_alias_electornumber(self):
+        """'Elector Number' resolves to RollNo."""
+        header = "Address1,Forename,Surname,PostCode,PDCode,Elector Number"
+        row = "42 Chamberlayne Rd,John,Smith,NW10 3JU,KG1,1"
+        self._run_and_check(header, row, "Elector No.", "1")
+
+    def test_file_swap_detected_before_aliases(self):
+        """TTW-format file is rejected even when aliases would resolve the headers."""
+        header = "Elector No. Prefix,Elector No.,Elector No. Suffix,Full Elector No.,Forename,Surname,Address1,PostCode"
+        row = "KG1,1,0,KG1-1-0,John,Smith,42 Chamberlayne Rd,NW10 3JU"
+        tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w",
+                                          encoding="utf-8", newline="")
+        tmp.write(header + "\n")
+        tmp.write(row + "\n")
+        tmp.close()
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(tmp.name, tmp_out.name)
+            self.assertNotEqual(rc, 0, "Should reject TTW-format input")
+            self.assertIn("TTW format", stderr)
+        finally:
+            os.unlink(tmp.name)
+            os.unlink(tmp_out.name)
+
+    def test_partial_ttw_file_detected(self):
+        """Partial TTW file with 'Elector No. Suffix' (no 'Full Elector No.') is still caught."""
+        header = "Elector No. Suffix,Forename,Surname,Address1,PostCode,PDCode,RollNo"
+        row = "0,John,Smith,42 Chamberlayne Rd,NW10 3JU,KG1,1"
+        tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w",
+                                          encoding="utf-8", newline="")
+        tmp.write(header + "\n")
+        tmp.write(row + "\n")
+        tmp.close()
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        tmp_out.close()
+        try:
+            rc, _, stderr = run_clean(tmp.name, tmp_out.name)
+            self.assertNotEqual(rc, 0, "Should reject file with TTW indicator header")
+            self.assertIn("TTW format", stderr)
+        finally:
+            os.unlink(tmp.name)
+            os.unlink(tmp_out.name)
 
 
 # ---------------------------------------------------------------------------

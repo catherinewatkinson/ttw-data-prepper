@@ -30,4 +30,5 @@ Electoral register CSVs follow a specific schema used by TTW Digital:
 - **Per-election fields** (repeated per election year): `Green Voting Intention`, `Party`, `Voted`, `Postal Voter`
 - **Voting intention codes**: `1`=Green, `2`=Conservative, `3`=Labour, `4`=LibDem, `5`=Other
 - **Party codes**: `G`=Green, `Con`=Conservative, `Lab`=Labour, `LD`=LibDem, `REF`=Reform
-- **Voted flag**: `v` indicates the elector voted in that election
+- **Voted flag**: `Y` indicates the elector voted in that election (blank = no)
+- **Postal Voter flag**: `Y` indicates the elector has a postal vote (blank = no)

@@ -19,9 +19,9 @@ EBP1,17,Mr,AmpersandAddr,Paul,,V,,E,1ST & 2ND,9 Coleman Road,,,,,NW10 3JU,London
 EBP1,18,Mr,CommaAddr,Queenie,,V,,E,"3 Connell Court, Lindal Road",London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,,,,,,
 EBP1,19,Mr,BracketAddr,Rachel,,V,,E,[100-102] Coleman Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,,,,,,
 EBP1,19.5,Mr,BracketAddr-Dup,Rachel,,V,,E,[100-102] Coleman Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,,,,,,
-EBP1,21,Mr,VoteGreen,Sam,,V,,E,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,1,G,v,1,G,v
+EBP1,21,Mr,VoteGreen,Sam,,V,,E,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,1,G,Y,1,G,Y
 EBP1,22,Mr,BlankElection,Tina,,V,,E,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,,,,,,
-EBP1,23,Mr,BadVoteIntent,Uma,,V,,E,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,7,G,v,X,G,
+EBP1,23,Mr,BadVoteIntent,Uma,,V,,E,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,7,G,Y,X,G,
 EBP1,24,Mr,UnknownParty,Victor,,V,,E,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,3,UKIP,,3,SNP,
 EBP1,25,Mr,VotedAny,Wendy,,V,,E,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,,,Y,,,Y
 EBP1,26,,MinFields,Xander,,,,,42 Chamberlayne Road,London,,,,,NW10 3JU,London,Brent North,,Kensal Green,,,D,E1,,,,,,,
