@@ -36,9 +36,6 @@ from ttw_common import (read_input, write_output, normalize_postcode,
 # Constants
 # ---------------------------------------------------------------------------
 
-# GVI derivation from party code
-PARTY_TO_GVI = {"G": "1", "Con": "2", "Lab": "3", "LD": "4"}
-
 # Extra columns from enriched register (non-TTW)
 EXTRA_COLS_REGISTER = [
     "Email Address", "Phone number", "Comments", "Issues",
@@ -333,6 +330,24 @@ class EnrichQAReport:
                              f"|PostCode={postcode}|Score={score:.3f}")
         for row_key, field, old, new in self.overwrite_details:
             lines.append(f"OVERWRITE|Row={row_key}|Field={field}|Old={old}|New={new}")
+        if self.canvassing_export_file:
+            lines.append(f"SUMMARY|Source=canvassing|Total={self.ce_total}"
+                         f"|Confident={self.ce_confident}"
+                         f"|Possible={len(self.ce_possible)}"
+                         f"|Ambiguous={len(self.ce_ambiguous)}"
+                         f"|Unmatched={len(self.ce_unmatched)}")
+        if self.enriched_register_file:
+            lines.append(f"SUMMARY|Source=enriched_register|Total={self.er_total}"
+                         f"|Matched={self.er_matched}"
+                         f"|Unmatched={len(self.er_unmatched)}"
+                         f"|Possible={len(self.er_possible)}"
+                         f"|Ambiguous={len(self.er_ambiguous)}")
+        if self.canvassing_register_file:
+            lines.append(f"SUMMARY|Source=canvassing_register|Total={self.cr_total}"
+                         f"|Matched={self.cr_matched}"
+                         f"|Unmatched={len(self.cr_unmatched)}"
+                         f"|Possible={len(self.cr_possible)}"
+                         f"|Ambiguous={len(self.cr_ambiguous)}")
         lines.append("### END MACHINE-READABLE SECTION ###")
 
         Path(path).write_text("\n".join(lines), encoding="utf-8")
@@ -423,10 +438,11 @@ def _surname_forename_similarity(surname_a, forename_a, surname_b, forename_b):
 
 
 def _normalize_address(addr):
-    """Normalize address for comparison: strip brackets, commas, leading zeros, sort tokens."""
+    """Normalize address for comparison: strip brackets, commas, ampersands, leading zeros, sort tokens."""
     s = addr or ""
     s = s.replace("[", "").replace("]", "")
     s = s.replace(",", "")
+    s = s.replace("&", "and")
     s = re.sub(r'\b0+(\d)', r'\1', s)  # "Flat 01" -> "Flat 1"
     s = re.sub(r'\s+', ' ', s).strip()
     s = " ".join(sorted(s.split()))    # "1 Willesden House" -> "1 House Willesden"
@@ -570,8 +586,8 @@ def match_enriched_register(base_rows, er_rows, threshold, report):
         scored.sort(key=lambda x: x[0], reverse=True)
         best_score, best_idx, best_name = scored[0]
 
-        # Check disambiguation
-        if len(scored) > 1:
+        # Check disambiguation — perfect matches (score 1.0) are always accepted
+        if len(scored) > 1 and best_score < 1.0:
             second_score = scored[1][0]
             if best_score >= effective_threshold and (best_score - second_score) < AMBIGUITY_MARGIN:
                 cands = [(scored[0][2], scored[0][0]), (scored[1][2], scored[1][0])]
@@ -724,8 +740,8 @@ def match_canvassing_export(base_rows, ce_rows, threshold, report):
         scored.sort(key=lambda x: x[0], reverse=True)
         best_score, best_idx, best_name = scored[0]
 
-        # Check disambiguation
-        if len(scored) > 1:
+        # Check disambiguation — perfect matches (score 1.0) are always accepted
+        if len(scored) > 1 and best_score < 1.0:
             second_score = scored[1][0]
             if best_score >= effective_threshold and (best_score - second_score) < AMBIGUITY_MARGIN:
                 # Ambiguous
@@ -819,13 +835,9 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
 
         _set_field(row, voted_key, er_voted, row_key, report)
         _set_field(row, party_key, party, row_key, report)
-        # Derive GVI from party code
-        if party in PARTY_TO_GVI:
-            _set_field(row, gvi_key, PARTY_TO_GVI[party], row_key, report)
-        elif party and party not in ("", "Ind", "REF"):
-            _set_field(row, gvi_key, "5", row_key, report)
-        else:
-            _set_field(row, gvi_key, "", row_key, report)
+        # GVI for historic elections is left empty — inferring voting intention
+        # from party would be an assumption, not actual canvassing data
+        _set_field(row, gvi_key, "", row_key, report)
 
     for election in future_elections:
         postal_key = f"{election} Postal Voter"

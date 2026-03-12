@@ -92,6 +92,20 @@ fi
 echo "Enrich step complete."
 echo ""
 
+# --- Step 3: Validate ---
+echo "Step 3: Validating enriched output..."
+VALIDATE_ARGS=("$OUTDIR/$BASE.enriched.csv" --base "$OUTDIR/$BASE.cleaned.csv"
+    --report "$OUTDIR/$BASE.enriched.csv.report.txt"
+    --elections "$HISTORIC" "$FUTURE" --canvassing-export "$DS3")
+if [ -f "$OUTDIR/$BASE.enriched.unmatched.csv" ]; then
+    VALIDATE_ARGS+=(--unmatched "$OUTDIR/$BASE.enriched.unmatched.csv")
+fi
+if ! python3 "$SCRIPT_DIR/validate_enrichment.py" "${VALIDATE_ARGS[@]}"; then
+    echo "WARNING: Validation found issues. Review the report above."
+    echo "         Enriched output preserved in: $OUTDIR"
+fi
+echo ""
+
 # --- Summary ---
 echo "=== Pipeline complete ==="
 echo "Output folder: $OUTDIR"

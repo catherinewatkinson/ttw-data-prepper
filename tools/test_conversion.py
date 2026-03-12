@@ -268,8 +268,8 @@ class TestDeletion(unittest.TestCase):
         self.assertIn("PartialAddr", surnames)
 
     def test_output_row_count(self):
-        """64 input rows - 1 deletion = 63 output rows."""
-        self.assertEqual(len(self.rows), 63)
+        """73 input rows - 1 deletion = 72 output rows."""
+        self.assertEqual(len(self.rows), 72)
 
     def test_deletion_reason_in_report(self):
         """Deleted record should appear in human-readable section too."""
@@ -1191,12 +1191,13 @@ class TestAddressReformatting(unittest.TestCase):
         self.assertTrue(len(advisory_warns) >= 1,
             "Long flat-prefix Address1 should generate advisory warning")
 
-    def test_ampersand_flagged_needs_manual_fix(self):
-        """Ampersand in Address1 should be flagged as NEEDS MANUAL FIX."""
-        warnings = [parse_machine_line(l) for l in self.machine if l.startswith("WARNING")]
-        amp_warns = [w for _, w in warnings if "&" in w.get("Issue", "")]
-        self.assertTrue(len(amp_warns) >= 1)
-        self.assertIn("NEEDS MANUAL FIX", amp_warns[0].get("Issue", ""))
+    def test_ampersand_auto_replaced(self):
+        """Ampersand in Address1 should be auto-replaced with 'and'."""
+        row = self._get_row("17")
+        self.assertEqual(row["Address1"], "1ST and 2ND")
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        amp_fixes = [f for _, f in fixes if "ampersand" in f.get("Issue", "").lower()]
+        self.assertTrue(len(amp_fixes) >= 1)
 
     def test_non_flat_comma_flagged(self):
         """Non-flat comma in Address1 should be flagged as NEEDS MANUAL FIX."""
@@ -1327,6 +1328,56 @@ class TestAddressReformatting(unittest.TestCase):
             self.assertEqual(row["Address1"], "Flat 1",
                 f"Row {rollno}: 'Flat 1' at 88 Kilburn Lane should not be padded (single-digit group)")
 
+    # --- Studio prefix tests ---
+
+    def test_studio_comma_split(self):
+        """Row 71: 'Studio 3, 30 Chamberlayne Road' -> split."""
+        row = self._get_row("71")
+        self.assertEqual(row["Address1"], "Studio 3")
+        self.assertEqual(row["Address2"], "30 Chamberlayne Road")
+
+    def test_studio_comma_free_split(self):
+        """Row 72: 'Studio 3 30 Chamberlayne Road' -> split."""
+        row = self._get_row("72")
+        self.assertEqual(row["Address1"], "Studio 3")
+        self.assertEqual(row["Address2"], "30 Chamberlayne Road")
+
+    def test_number_before_studio_reordered(self):
+        """Row 73: '56 Studio 1' -> Addr1='Studio 1', Addr2='56'."""
+        row = self._get_row("73")
+        self.assertEqual(row["Address1"], "Studio 1")
+        self.assertEqual(row["Address2"], "56")
+
+    def test_studio_number_padded(self):
+        """Row 74: 'Studio 1' at 22 Evelina Gardens -> 'Studio 01' (max width 2 from Studio 10)."""
+        row = self._get_row("74")
+        self.assertEqual(row["Address1"], "Studio 01")
+
+    def test_studio_max_width_unchanged(self):
+        """Row 75: 'Studio 10' at 22 Evelina Gardens -> unchanged (already max width)."""
+        row = self._get_row("75")
+        self.assertEqual(row["Address1"], "Studio 10")
+
+    # --- Fix 4b: Building name with road suffix ---
+
+    def test_court_reordered_with_road_in_addr2(self):
+        """Row 76: '24 Sheil Court' with Addr2='30 Chamberlayne Road' -> 'Sheil Court 24'."""
+        row = self._get_row("76")
+        self.assertEqual(row["Address1"], "Sheil Court 24")
+        self.assertEqual(row["Address2"], "30 Chamberlayne Road")
+
+    def test_court_not_reordered_empty_addr2(self):
+        """Row 77: '24 Sheil Court' with empty Addr2 -> unchanged (could be a road)."""
+        row = self._get_row("77")
+        self.assertEqual(row["Address1"], "24 Sheil Court")
+
+    # --- Directional road suffix ---
+
+    def test_road_with_direction_not_reordered(self):
+        """Row 79: '73 Park Avenue North' -> unchanged (recognised as road + direction)."""
+        row = self._get_row("79")
+        self.assertEqual(row["Address1"], "73 Park Avenue North")
+
 
 # ---------------------------------------------------------------------------
 # Realistic Messy Data Tests
@@ -1399,13 +1450,15 @@ class TestRealisticMessyData(unittest.TestCase):
 
     # --- Address issue flagging ---
 
-    def test_ampersand_flagged(self):
-        """Ampersand address should generate a NEEDS MANUAL FIX warning."""
-        warnings = [parse_machine_line(l) for l in self.machine if l.startswith("WARNING")]
-        amp_warns = [w for _, w in warnings if "&" in w.get("Issue", "")]
-        self.assertTrue(len(amp_warns) >= 1, "Ampersand address should be flagged")
-        for w in amp_warns:
-            self.assertIn("NEEDS MANUAL FIX", w.get("Issue", ""))
+    def test_ampersand_auto_replaced(self):
+        """Ampersand in address should be auto-replaced with 'and'."""
+        mensah = [r for r in self.rows if r["Surname"] == "Mensah"
+                  and "and" in r.get("Address1", "")]
+        self.assertTrue(len(mensah) >= 1, "At least one Mensah row should have 'and' in Address1")
+        self.assertEqual(mensah[0]["Address1"], "1ST and 2ND")
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        amp_fixes = [f for _, f in fixes if "ampersand" in f.get("Issue", "").lower()]
+        self.assertTrue(len(amp_fixes) >= 1, "Ampersand should produce FIX entry")
 
     def test_comma_building_road_flagged(self):
         """Comma building+road pattern should generate a NEEDS MANUAL FIX warning."""

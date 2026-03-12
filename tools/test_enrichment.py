@@ -503,13 +503,13 @@ class TestElectionColumns(unittest.TestCase):
         ka1_2 = [r for r in rows if r["Full Elector No."] == "KA1-2-0"][0]
         self.assertEqual(ka1_2["GE2024 Party"], "Lab")
 
-    def test_ge2024_voting_intention_derived(self):
-        """Party G -> GVI 1, Party Lab -> GVI 3."""
+    def test_ge2024_voting_intention_not_derived(self):
+        """Historic GVI should be empty — not inferred from party."""
         headers, rows = self._run_register_only()
         ka1_1 = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
-        self.assertEqual(ka1_1["GE2024 Green Voting Intention"], "1")
+        self.assertEqual(ka1_1["GE2024 Green Voting Intention"], "")
         ka1_2 = [r for r in rows if r["Full Elector No."] == "KA1-2-0"][0]
-        self.assertEqual(ka1_2["GE2024 Green Voting Intention"], "3")
+        self.assertEqual(ka1_2["GE2024 Green Voting Intention"], "")
 
     def test_2026_postal_voter(self):
         """PostalVoter? non-empty -> 2026 Postal Voter = 'Y'."""
@@ -817,7 +817,7 @@ class TestQAReport(unittest.TestCase):
         self.assertIn("### MACHINE-READABLE SECTION ###", text)
         self.assertIn("### END MACHINE-READABLE SECTION ###", text)
         # All machine lines should start with a known prefix
-        valid_prefixes = ("CONFLICT", "WARNING", "MATCH", "OVERWRITE")
+        valid_prefixes = ("CONFLICT", "WARNING", "MATCH", "OVERWRITE", "SUMMARY")
         for line in machine:
             self.assertTrue(
                 any(line.startswith(p) for p in valid_prefixes),

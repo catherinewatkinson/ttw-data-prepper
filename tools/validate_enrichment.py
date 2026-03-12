@@ -112,6 +112,7 @@ def parse_enrichment_report(report_path):
         "conflicts": [],
         "overwrites": [],
         "warnings": [],
+        "summaries": {},
     }
 
     for line in lines:
@@ -161,6 +162,18 @@ def parse_enrichment_report(report_path):
             })
         elif line_type == "WARNING":
             result["warnings"].append("|".join(parts[1:]))
+        elif line_type == "SUMMARY":
+            source = fields.get("Source", "")
+            if source:
+                summary = {}
+                for k, v in fields.items():
+                    if k == "Source":
+                        continue
+                    try:
+                        summary[k] = int(v)
+                    except (ValueError, TypeError):
+                        summary[k] = v
+                result["summaries"][source] = summary
 
     return result
 
@@ -361,6 +374,190 @@ def check_file_format(output_path):
             Level.PASS, "file_format",
             "UTF-8 BOM and CRLF line endings present",
         ))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Canvassing accounting checks
+# ---------------------------------------------------------------------------
+
+def check_canvassing_accounting(report_data, canvassing_rows=None,
+                                 unmatched_rows=None, unmatched_path=None):
+    """Verify all canvassing data is accounted for.
+
+    Sub-checks:
+    - Internal consistency: confident + possible + ambiguous + unmatched == total
+    - CSV row count: len(canvassing_rows) == total
+    - Unmatched row count: len(unmatched_rows) == possible + ambiguous + unmatched
+    - Cross-check: canvassing_rows - unmatched_rows == confident
+    """
+    results = []
+    summaries = report_data.get("summaries", {}) if report_data else {}
+    cs = summaries.get("canvassing")
+    if not cs:
+        return results
+
+    total = cs.get("Total", 0)
+    confident = cs.get("Confident", 0)
+    possible = cs.get("Possible", 0)
+    ambiguous = cs.get("Ambiguous", 0)
+    unmatched = cs.get("Unmatched", 0)
+
+    # Sub-check 1: Internal consistency
+    category_sum = confident + possible + ambiguous + unmatched
+    if category_sum != total:
+        results.append(CheckResult(
+            Level.FAIL, "canvassing_accounting",
+            f"Category sum mismatch: confident({confident}) + "
+            f"possible({possible}) + ambiguous({ambiguous}) + "
+            f"unmatched({unmatched}) = {category_sum}, but total = {total}",
+        ))
+    else:
+        results.append(CheckResult(
+            Level.PASS, "canvassing_accounting",
+            f"Canvassing categories sum correctly: "
+            f"{confident}+{possible}+{ambiguous}+{unmatched} = {total}",
+        ))
+
+    # Sub-check 2: CSV row count matches report total
+    if canvassing_rows is not None:
+        csv_count = len(canvassing_rows)
+        if csv_count != total:
+            results.append(CheckResult(
+                Level.FAIL, "canvassing_csv_count",
+                f"Canvassing CSV has {csv_count} rows but report "
+                f"total is {total}",
+            ))
+        else:
+            results.append(CheckResult(
+                Level.PASS, "canvassing_csv_count",
+                f"Canvassing CSV row count ({csv_count}) matches "
+                f"report total ({total})",
+            ))
+
+    # Expected unmatched count (possible + ambiguous + unmatched)
+    expected_unmatched = possible + ambiguous + unmatched
+
+    # Sub-check 3: Unmatched row count
+    if unmatched_rows is not None:
+        unmatched_csv_count = len(unmatched_rows)
+        if unmatched_csv_count != expected_unmatched:
+            results.append(CheckResult(
+                Level.FAIL, "unmatched_csv_count",
+                f"Unmatched CSV has {unmatched_csv_count} rows but expected "
+                f"possible({possible}) + ambiguous({ambiguous}) + "
+                f"unmatched({unmatched}) = {expected_unmatched}",
+            ))
+        else:
+            results.append(CheckResult(
+                Level.PASS, "unmatched_csv_count",
+                f"Unmatched CSV row count ({unmatched_csv_count}) matches "
+                f"expected ({expected_unmatched})",
+            ))
+    elif expected_unmatched > 0:
+        # No unmatched CSV but there should be unmatched rows
+        results.append(CheckResult(
+            Level.FAIL, "unmatched_csv_count",
+            f"No unmatched CSV found but report expects "
+            f"{expected_unmatched} non-confident rows "
+            f"(possible={possible}, ambiguous={ambiguous}, "
+            f"unmatched={unmatched})",
+        ))
+    else:
+        results.append(CheckResult(
+            Level.PASS, "unmatched_csv_count",
+            "No unmatched CSV needed (0 non-confident rows)",
+        ))
+
+    # Sub-check 4: Cross-check canvassing - unmatched == confident
+    if canvassing_rows is not None and unmatched_rows is not None:
+        diff = len(canvassing_rows) - len(unmatched_rows)
+        if diff != confident:
+            results.append(CheckResult(
+                Level.FAIL, "canvassing_cross_check",
+                f"Canvassing rows ({len(canvassing_rows)}) - "
+                f"unmatched rows ({len(unmatched_rows)}) = {diff}, "
+                f"but report says {confident} confident matches",
+            ))
+        else:
+            results.append(CheckResult(
+                Level.PASS, "canvassing_cross_check",
+                f"Cross-check: {len(canvassing_rows)} - "
+                f"{len(unmatched_rows)} = {confident} confident matches",
+            ))
+
+    return results
+
+
+UNMATCHED_HELPER_COLUMNS = [
+    "Match Category", "Match Score", "Best Candidate Elector No.",
+    "Best Candidate Name", "Best Candidate Address",
+]
+
+VALID_MATCH_CATEGORIES = {"unmatched", "possible", "ambiguous"}
+
+
+def check_unmatched_csv_valid(unmatched_rows, unmatched_headers):
+    """Validate unmatched CSV structure.
+
+    Checks:
+    - Helper columns present
+    - Match Category values valid
+    - Original canvassing columns present (profile_name at minimum)
+    """
+    results = []
+    if unmatched_rows is None:
+        results.append(CheckResult(
+            Level.PASS, "unmatched_csv_valid",
+            "No unmatched CSV to validate (0 unmatched rows expected)",
+        ))
+        return results
+
+    header_set = set(unmatched_headers)
+
+    # Check helper columns
+    missing_helpers = [c for c in UNMATCHED_HELPER_COLUMNS
+                       if c not in header_set]
+    if missing_helpers:
+        results.append(CheckResult(
+            Level.WARN, "unmatched_csv_valid",
+            f"Unmatched CSV missing helper column(s): {missing_helpers}",
+        ))
+    else:
+        results.append(CheckResult(
+            Level.PASS, "unmatched_csv_valid",
+            "All helper columns present in unmatched CSV",
+        ))
+
+    # Check Match Category values
+    if "Match Category" in header_set:
+        invalid_cats = []
+        for i, row in enumerate(unmatched_rows):
+            cat = row.get("Match Category", "").strip().lower()
+            if cat and cat not in VALID_MATCH_CATEGORIES:
+                invalid_cats.append(
+                    f"row {i}: '{row.get('Match Category', '')}'"
+                )
+        if invalid_cats:
+            results.append(CheckResult(
+                Level.WARN, "unmatched_match_categories",
+                f"{len(invalid_cats)} invalid Match Category value(s)",
+                details=invalid_cats[:20],
+            ))
+        else:
+            results.append(CheckResult(
+                Level.PASS, "unmatched_match_categories",
+                "All Match Category values valid",
+            ))
+
+    # Check original canvassing columns present
+    if "profile_name" not in header_set:
+        results.append(CheckResult(
+            Level.WARN, "unmatched_csv_valid",
+            "Unmatched CSV missing 'profile_name' column "
+            "(original canvassing data may be absent)",
+        ))
+
     return results
 
 
@@ -782,7 +979,8 @@ def compute_statistics(base_rows, base_headers, output_rows,
 # Report formatting
 # ---------------------------------------------------------------------------
 
-def format_report(results, output_path, base_path, report_path, strict):
+def format_report(results, output_path, base_path, report_path, strict,
+                   canvassing_path=None, unmatched_path=None):
     """Format validation results into a human-readable report with
     machine-readable footer."""
     lines = []
@@ -795,6 +993,10 @@ def format_report(results, output_path, base_path, report_path, strict):
         lines.append(f"Base file: {base_path}")
     if report_path:
         lines.append(f"Enrichment report: {report_path}")
+    if canvassing_path:
+        lines.append(f"Canvassing export: {canvassing_path}")
+    if unmatched_path:
+        lines.append(f"Unmatched CSV: {unmatched_path}")
     lines.append(f"Mode: {'strict' if strict else 'normal'}")
     lines.append("")
 
@@ -880,7 +1082,8 @@ def format_report(results, output_path, base_path, report_path, strict):
 
 def run_validation(output_path, base_path=None, report_path=None,
                    elections=None, min_match_rate=DEFAULT_MIN_MATCH_RATE,
-                   strict=False, quiet=False):
+                   strict=False, quiet=False,
+                   canvassing_path=None, unmatched_path=None):
     """Run all validation checks. Returns (exit_code, report_text)."""
 
     # Load data
@@ -892,6 +1095,26 @@ def run_validation(output_path, base_path=None, report_path=None,
     report_data = None
     if report_path:
         report_data = parse_enrichment_report(report_path)
+
+    # Load canvassing CSV if provided
+    canvassing_rows = None
+    if canvassing_path:
+        canvassing_rows, _, _ = read_input(canvassing_path)
+
+    # Load unmatched CSV
+    unmatched_rows = None
+    unmatched_headers = None
+    resolved_unmatched_path = unmatched_path
+    if unmatched_path is None:
+        # Auto-derive from output path
+        out_p = Path(output_path)
+        candidate = out_p.parent / f"{out_p.stem}.unmatched.csv"
+        if candidate.exists():
+            resolved_unmatched_path = str(candidate)
+    if resolved_unmatched_path and Path(resolved_unmatched_path).exists():
+        unmatched_rows, _, unmatched_headers = read_input(
+            resolved_unmatched_path
+        )
 
     # Discover elections
     election_names = discover_election_names(output_headers, elections)
@@ -918,6 +1141,13 @@ def run_validation(output_path, base_path=None, report_path=None,
     results.extend(check_duplicate_elector_numbers(output_rows))
     results.extend(check_file_format(output_path))
 
+    # Canvassing accounting (FAIL level)
+    if report_data and report_data.get("summaries", {}).get("canvassing"):
+        results.extend(check_canvassing_accounting(
+            report_data, canvassing_rows, unmatched_rows,
+            resolved_unmatched_path,
+        ))
+
     # WARN checks
     results.extend(check_match_rate(
         report_data, output_rows, election_names, min_match_rate
@@ -942,6 +1172,12 @@ def run_validation(output_path, base_path=None, report_path=None,
     results.extend(check_voted_values(output_rows, election_names))
     results.extend(check_postal_voter_values(output_rows, election_names))
 
+    # Unmatched CSV structure (WARN level)
+    if unmatched_rows is not None or resolved_unmatched_path:
+        results.extend(check_unmatched_csv_valid(
+            unmatched_rows, unmatched_headers or [],
+        ))
+
     # INFO
     results.extend(compute_statistics(
         base_rows, base_headers, output_rows, output_headers, election_names
@@ -949,7 +1185,8 @@ def run_validation(output_path, base_path=None, report_path=None,
 
     # Format report
     report_text = format_report(
-        results, output_path, base_path, report_path, strict
+        results, output_path, base_path, report_path, strict,
+        canvassing_path, resolved_unmatched_path,
     )
 
     # Determine exit code
@@ -986,11 +1223,23 @@ def main():
                         default=DEFAULT_MIN_MATCH_RATE,
                         help="Minimum acceptable match rate "
                         f"(default: {DEFAULT_MIN_MATCH_RATE})")
+    parser.add_argument("--canvassing-export", default=None,
+                        help="Canvassing export CSV (DS3) for accounting "
+                        "cross-checks")
+    parser.add_argument("--unmatched", default=None,
+                        help="Unmatched CSV path (auto-derived from output "
+                        "if not given)")
     parser.add_argument("--strict", action="store_true",
                         help="Promote WARNs to FAILs in exit code")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress stdout output")
     args = parser.parse_args()
+
+    # Validate --unmatched: if explicitly provided, must exist
+    if args.unmatched and not Path(args.unmatched).exists():
+        print(f"ERROR: --unmatched file not found: {args.unmatched}",
+              file=sys.stderr)
+        sys.exit(1)
 
     exit_code, report_text = run_validation(
         output_path=args.output,
@@ -1000,6 +1249,8 @@ def main():
         min_match_rate=args.min_match_rate,
         strict=args.strict,
         quiet=args.quiet,
+        canvassing_path=args.canvassing_export,
+        unmatched_path=args.unmatched,
     )
 
     if not args.quiet:

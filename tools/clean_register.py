@@ -205,8 +205,15 @@ ROAD_SUFFIXES = {"road", "rd", "street", "st", "lane", "ln", "avenue", "ave",
     "parade", "broadway", "highway", "embankment", "boulevard",
     "vale", "chase", "green", "common", "path", "mount", "villas"}
 
-# Regex for unit prefixes (Flat, Unit, Apt, Room)
-UNIT_PREFIXES_RE = re.compile(r"^(flat|unit|apt|room)\s+", re.IGNORECASE)
+# Building-name suffixes that also appear in ROAD_SUFFIXES (used by Fix 4b)
+# These words commonly name buildings (e.g. "Sheil Court", "Oak Terrace") but
+# Fix 4 skips them because they look like roads. Fix 4b reorders when Address2
+# confirms a road is already present.
+BUILDING_NAME_SUFFIXES = {"court", "place", "gardens", "terrace", "grove",
+    "square", "parade", "mews", "villas", "green", "chase", "rise", "row"}
+
+# Regex for unit prefixes (Flat, Unit, Apt, Room, Studio)
+UNIT_PREFIXES_RE = re.compile(r"^(flat|unit|apt|room|studio)\s+", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -726,10 +733,19 @@ def normalize_names(row, row_num, report):
 # Address reformatting
 # ---------------------------------------------------------------------------
 
+_DIRECTIONAL_SUFFIXES = {"north", "south", "east", "west"}
+
 def _looks_like_road(text):
-    """Return True if text ends with a road suffix."""
+    """Return True if text ends with a road suffix (or road suffix + direction)."""
     words = text.lower().split()
-    return bool(words) and words[-1] in ROAD_SUFFIXES
+    if not words:
+        return False
+    if words[-1] in ROAD_SUFFIXES:
+        return True
+    # Handle trailing directional: "Park Avenue North" -> check "Avenue"
+    if len(words) >= 2 and words[-1] in _DIRECTIONAL_SUFFIXES and words[-2] in ROAD_SUFFIXES:
+        return True
+    return False
 
 
 def reformat_addresses(row, row_num, report):
@@ -794,8 +810,22 @@ def reformat_addresses(row, row_num, report):
     addr1 = row.get("Address1", "")
     addr2 = row.get("Address2", "")
 
+    # --- Fix 1c: Replace '&' with 'and' in address fields ---
+    for addr_field in ["Address1", "Address2", "Address3", "Address4", "Address5", "Address6"]:
+        val = row.get(addr_field, "")
+        if "&" in val:
+            old_val = val
+            new_val = val.replace("&", "and")
+            row[addr_field] = new_val
+            report.fixes.append((row_num, addr_field, old_val, new_val,
+                "ampersand replaced with 'and'"))
+
+    # Refresh locals after fix 1c
+    addr1 = row.get("Address1", "")
+    addr2 = row.get("Address2", "")
+
     # --- Fix 2: Flat comma split (Address1 matches "Flat/Unit/Apt X, rest" AND Address2 empty) ---
-    flat_comma_match = re.match(r"^((?:Flat|Unit|Apt|Room)\s+\S+)\s*,\s*(.+)$", addr1, re.IGNORECASE)
+    flat_comma_match = re.match(r"^((?:Flat|Unit|Apt|Room|Studio)\s+\S+)\s*,\s*(.+)$", addr1, re.IGNORECASE)
     if flat_comma_match:
         if not addr2:
             # Auto-split
@@ -817,7 +847,7 @@ def reformat_addresses(row, row_num, report):
     # Split only when flat ID is standard (numeric/single-letter) and remainder looks like a road.
     # Tighter regex prevents mis-splitting multi-word flat IDs like "Flat Ground Floor".
     comma_free_flat_road = re.match(
-        r"^((?:Flat|Unit|Apt|Room)\s+(?:\d+[A-Za-z]?|[A-Za-z]))\s+(.+)$", addr1, re.IGNORECASE)
+        r"^((?:Flat|Unit|Apt|Room|Studio)\s+(?:\d+[A-Za-z]?|[A-Za-z]))\s+(.+)$", addr1, re.IGNORECASE)
     if comma_free_flat_road and not addr2:
         flat_part = comma_free_flat_road.group(1)
         road_part = comma_free_flat_road.group(2)
@@ -834,7 +864,7 @@ def reformat_addresses(row, row_num, report):
 
     # --- Fix 3: Number before Flat (Address1 starts with \d+ Flat/Unit/Apt) ---
     # UG C3 slide 12: "56 Flat 1 | Coleman Road" is explicitly INVALID regardless of Address2.
-    num_before_flat = re.match(r"^(\d+[A-Za-z]?)\s+((?:Flat|Unit|Apt|Room)\s+.*)$", addr1, re.IGNORECASE)
+    num_before_flat = re.match(r"^(\d+[A-Za-z]?)\s+((?:Flat|Unit|Apt|Room|Studio)\s+.*)$", addr1, re.IGNORECASE)
     if num_before_flat:
         old_addr1 = addr1
         building_num = num_before_flat.group(1)
@@ -879,17 +909,40 @@ def reformat_addresses(row, row_num, report):
             report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
                 "number before building name reordered"))
 
+    # Refresh locals after fix 4
+    addr1 = row.get("Address1", "")
+    addr2 = row.get("Address2", "")
+
+    # --- Fix 4b: Number before building name that ends in a road-suffix word ---
+    # Fix 4 skips names like "Sheil Court" because "court" is in ROAD_SUFFIXES.
+    # This second pass catches those when Address2 confirms a road is already present.
+    if not addr2:
+        pass  # Skip — could genuinely be a road name
+    else:
+        num_before_ambig = re.match(r"^(\d+[A-Za-z]?)\s+(.+)$", addr1)
+        if num_before_ambig:
+            number = num_before_ambig.group(1)
+            remainder = num_before_ambig.group(2)
+            remainder_words = remainder.split()
+            if (len(remainder_words) >= 2
+                    and all(w.isalpha() for w in remainder_words)
+                    and _looks_like_road(remainder)
+                    and remainder_words[-1].lower() in BUILDING_NAME_SUFFIXES
+                    and not UNIT_PREFIXES_RE.match(remainder)
+                    and _looks_like_road(addr2)):
+                old_addr1 = addr1
+                new_addr1 = f"{remainder} {number}"
+                row["Address1"] = new_addr1
+                report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
+                    "number before building name reordered (Address2 confirms road)"))
+
     # Refresh for flagging
     addr1 = row.get("Address1", "")
 
     # --- Flags (NEEDS MANUAL FIX — logged as WARNING) ---
-    if "&" in addr1:
-        report.warnings.append((row_num, "Address1", addr1,
-            "NEEDS MANUAL FIX: Contains '&' -- too complex to auto-parse (see UG C3 slide 12)"))
-
     if "," in addr1:
         # Check if it's a flat comma pattern (which was already handled above)
-        flat_match = re.match(r"^((?:Flat|Unit|Apt|Room)\s+\S+)\s*,", addr1, re.IGNORECASE)
+        flat_match = re.match(r"^((?:Flat|Unit|Apt|Room|Studio)\s+\S+)\s*,", addr1, re.IGNORECASE)
         # Check if it's a bracketed prefix (e.g. "[506], 10 Evelina Gardens")
         bracket_match = re.match(r"^\[.+?\]\s*,", addr1)
         if not flat_match and not bracket_match:
@@ -914,7 +967,7 @@ def zero_pad_flat_numbers(rows, report):
     Groups rows by (Address2, PostCode). Within each group, pads numeric
     flat IDs to the maximum width found (e.g. Flat 1 -> Flat 01 if max is 12).
     """
-    flat_re = re.compile(r"^((?:Flat|Unit|Apt|Room)\s+)(\d+)([A-Za-z]?)$", re.IGNORECASE)
+    flat_re = re.compile(r"^((?:Flat|Unit|Apt|Room|Studio)\s+)(\d+)([A-Za-z]?)$", re.IGNORECASE)
 
     # Build groups: (Address2, PostCode) -> [(index, match)]
     groups = defaultdict(list)

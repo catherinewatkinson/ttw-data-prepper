@@ -871,5 +871,529 @@ class TestEndToEnd(unittest.TestCase):
                          f"Exit code was {rc}, expected 0:\n{stdout}")
 
 
+# ---------------------------------------------------------------------------
+# TestCanvassingAccounting
+# ---------------------------------------------------------------------------
+
+CANVASSING_CSV = TEST_DATA / "enrich_canvassing.csv"
+
+
+class TestCanvassingAccounting(unittest.TestCase):
+    """Tests for canvassing accounting checks."""
+
+    def _write_report_with_summary(self, summary_lines, extra_lines=None):
+        """Write a report file with SUMMARY lines in machine-readable section."""
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        lines = [
+            "Human readable preamble",
+            "",
+            "### MACHINE-READABLE SECTION ###",
+        ]
+        if extra_lines:
+            lines.extend(extra_lines)
+        lines.extend(summary_lines)
+        lines.append("### END MACHINE-READABLE SECTION ###")
+        Path(path).write_text("\n".join(lines), encoding="utf-8")
+        return path
+
+    def _write_unmatched_csv(self, rows, extra_headers=None):
+        """Write a synthetic unmatched CSV."""
+        headers = [
+            "profile_name", "address 1", "address 2", "address 3",
+            "address 4", "Match Category", "Match Score",
+            "Best Candidate Elector No.", "Best Candidate Name",
+            "Best Candidate Address",
+        ]
+        if extra_headers:
+            headers.extend(extra_headers)
+        fd, path = tempfile.mkstemp(suffix=".unmatched.csv")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=headers,
+                                    lineterminator="\r\n",
+                                    extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        return path
+
+    def _write_canvassing_csv(self, n_rows):
+        """Write a synthetic canvassing CSV with n_rows data rows."""
+        headers = ["profile_name", "address 1", "address 2",
+                    "address 3", "address 4"]
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=headers,
+                                    lineterminator="\r\n")
+            writer.writeheader()
+            for i in range(n_rows):
+                writer.writerow({
+                    "profile_name": f"Person {i}",
+                    "address 1": f"{i} Test Street",
+                    "address 2": "", "address 3": "", "address 4": "",
+                })
+        return path
+
+    def test_accounting_passes_all_consistent(self):
+        """All four sub-checks pass when data is consistent."""
+        # 10 total: 7 confident, 1 possible, 1 ambiguous, 1 unmatched
+        report_path = self._write_report_with_summary([
+            "SUMMARY|Source=canvassing|Total=10|Confident=7"
+            "|Possible=1|Ambiguous=1|Unmatched=1",
+        ])
+        canvassing_path = self._write_canvassing_csv(10)
+        unmatched_rows = [
+            {"profile_name": "A", "address 1": "1 X",
+             "Match Category": "possible", "Match Score": "0.7",
+             "Best Candidate Elector No.": "KA1-1-0",
+             "Best Candidate Name": "B", "Best Candidate Address": "1 X"},
+            {"profile_name": "B", "address 1": "2 X",
+             "Match Category": "ambiguous", "Match Score": "0.6",
+             "Best Candidate Elector No.": "KA1-2-0",
+             "Best Candidate Name": "C", "Best Candidate Address": "2 X"},
+            {"profile_name": "C", "address 1": "3 X",
+             "Match Category": "unmatched", "Match Score": "0.3",
+             "Best Candidate Elector No.": "", "Best Candidate Name": "",
+             "Best Candidate Address": ""},
+        ]
+        unmatched_path = self._write_unmatched_csv(unmatched_rows)
+
+        # Build enriched output (minimal valid file)
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--report", report_path,
+            "--elections", "GE2024", "2026",
+            "--canvassing-export", canvassing_path,
+            "--unmatched", unmatched_path,
+        ])
+
+        # All accounting checks should PASS
+        self.assertIn("canvassing_accounting", stdout)
+        self.assertIn("canvassing_csv_count", stdout)
+        self.assertIn("unmatched_csv_count", stdout)
+        self.assertIn("canvassing_cross_check", stdout)
+
+        # No FAIL for accounting categories
+        report_lines = read_report(stdout)
+        accounting_lines = [l for l in report_lines
+                           if "canvassing_accounting" in l
+                           or "canvassing_csv_count" in l
+                           or "unmatched_csv_count" in l
+                           or "canvassing_cross_check" in l]
+        for line in accounting_lines:
+            self.assertIn("Level=PASS", line, f"Expected PASS: {line}")
+
+        for p in [report_path, canvassing_path, unmatched_path,
+                  base_path, output_path]:
+            os.unlink(p)
+
+    def test_accounting_fails_internal_mismatch(self):
+        """FAIL when category sum != total."""
+        report_path = self._write_report_with_summary([
+            "SUMMARY|Source=canvassing|Total=10|Confident=5"
+            "|Possible=1|Ambiguous=1|Unmatched=1",  # 5+1+1+1=8 != 10
+        ])
+
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--report", report_path,
+            "--elections", "GE2024", "2026",
+        ])
+
+        self.assertIn("canvassing_accounting", stdout)
+        report_lines = read_report(stdout)
+        accounting = [l for l in report_lines
+                     if "canvassing_accounting" in l]
+        self.assertTrue(any("Level=FAIL" in l for l in accounting))
+
+        for p in [report_path, base_path, output_path]:
+            os.unlink(p)
+
+    def test_accounting_fails_csv_count_mismatch(self):
+        """FAIL when canvassing CSV rows != report total."""
+        report_path = self._write_report_with_summary([
+            "SUMMARY|Source=canvassing|Total=10|Confident=7"
+            "|Possible=1|Ambiguous=1|Unmatched=1",
+        ])
+        canvassing_path = self._write_canvassing_csv(8)  # 8 != 10
+
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--report", report_path,
+            "--elections", "GE2024", "2026",
+            "--canvassing-export", canvassing_path,
+        ])
+
+        report_lines = read_report(stdout)
+        csv_count = [l for l in report_lines if "canvassing_csv_count" in l]
+        self.assertTrue(any("Level=FAIL" in l for l in csv_count))
+
+        for p in [report_path, canvassing_path, base_path, output_path]:
+            os.unlink(p)
+
+    def test_accounting_fails_unmatched_count_mismatch(self):
+        """FAIL when unmatched CSV rows != expected count."""
+        report_path = self._write_report_with_summary([
+            "SUMMARY|Source=canvassing|Total=10|Confident=7"
+            "|Possible=1|Ambiguous=1|Unmatched=1",  # expect 3 unmatched rows
+        ])
+        # Only 1 unmatched row instead of 3
+        unmatched_rows = [
+            {"profile_name": "A", "address 1": "1 X",
+             "Match Category": "unmatched", "Match Score": "0.3",
+             "Best Candidate Elector No.": "", "Best Candidate Name": "",
+             "Best Candidate Address": ""},
+        ]
+        unmatched_path = self._write_unmatched_csv(unmatched_rows)
+
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--report", report_path,
+            "--elections", "GE2024", "2026",
+            "--unmatched", unmatched_path,
+        ])
+
+        report_lines = read_report(stdout)
+        unmatched_count = [l for l in report_lines
+                          if "unmatched_csv_count" in l]
+        self.assertTrue(any("Level=FAIL" in l for l in unmatched_count))
+
+        for p in [report_path, unmatched_path, base_path, output_path]:
+            os.unlink(p)
+
+    def test_no_report_skips_accounting(self):
+        """No accounting checks run without a report file."""
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--elections", "GE2024", "2026",
+        ])
+
+        # No accounting-related checks should appear
+        self.assertNotIn("canvassing_accounting", stdout)
+        self.assertNotIn("canvassing_csv_count", stdout)
+
+        for p in [base_path, output_path]:
+            os.unlink(p)
+
+
+# ---------------------------------------------------------------------------
+# TestUnmatchedCSVValidation
+# ---------------------------------------------------------------------------
+
+class TestUnmatchedCSVValidation(unittest.TestCase):
+    """Tests for unmatched CSV structure checks."""
+
+    def _write_unmatched_csv(self, rows, headers):
+        """Write an unmatched CSV with given headers."""
+        fd, path = tempfile.mkstemp(suffix=".unmatched.csv")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=headers,
+                                    lineterminator="\r\n",
+                                    extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        return path
+
+    def test_valid_unmatched_csv_passes(self):
+        """Well-formed unmatched CSV passes all checks."""
+        headers = [
+            "profile_name", "address 1", "Match Category", "Match Score",
+            "Best Candidate Elector No.", "Best Candidate Name",
+            "Best Candidate Address",
+        ]
+        rows = [
+            {"profile_name": "A", "address 1": "1 X",
+             "Match Category": "unmatched", "Match Score": "0.3",
+             "Best Candidate Elector No.": "", "Best Candidate Name": "",
+             "Best Candidate Address": ""},
+        ]
+        unmatched_path = self._write_unmatched_csv(rows, headers)
+
+        # Need a report with SUMMARY so the unmatched check is triggered
+        fd, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        Path(report_path).write_text(
+            "### MACHINE-READABLE SECTION ###\n"
+            "SUMMARY|Source=canvassing|Total=5|Confident=4"
+            "|Possible=0|Ambiguous=0|Unmatched=1\n"
+            "### END MACHINE-READABLE SECTION ###\n",
+            encoding="utf-8",
+        )
+
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--report", report_path,
+            "--elections", "GE2024", "2026",
+            "--unmatched", unmatched_path,
+        ])
+
+        report_lines = read_report(stdout)
+        valid_lines = [l for l in report_lines
+                      if "unmatched_csv_valid" in l]
+        for line in valid_lines:
+            self.assertIn("Level=PASS", line)
+
+        for p in [unmatched_path, report_path, base_path, output_path]:
+            os.unlink(p)
+
+    def test_missing_helper_columns_warns(self):
+        """WARN when helper columns are missing."""
+        headers = ["profile_name", "address 1"]  # missing all helpers
+        rows = [{"profile_name": "A", "address 1": "1 X"}]
+        unmatched_path = self._write_unmatched_csv(rows, headers)
+
+        fd, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        Path(report_path).write_text(
+            "### MACHINE-READABLE SECTION ###\n"
+            "SUMMARY|Source=canvassing|Total=5|Confident=4"
+            "|Possible=0|Ambiguous=0|Unmatched=1\n"
+            "### END MACHINE-READABLE SECTION ###\n",
+            encoding="utf-8",
+        )
+
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--report", report_path,
+            "--elections", "GE2024", "2026",
+            "--unmatched", unmatched_path,
+        ])
+
+        report_lines = read_report(stdout)
+        valid_lines = [l for l in report_lines
+                      if "unmatched_csv_valid" in l]
+        self.assertTrue(any("Level=WARN" in l for l in valid_lines))
+
+        for p in [unmatched_path, report_path, base_path, output_path]:
+            os.unlink(p)
+
+    def test_invalid_match_category_warns(self):
+        """WARN when Match Category has invalid values."""
+        headers = [
+            "profile_name", "address 1", "Match Category", "Match Score",
+            "Best Candidate Elector No.", "Best Candidate Name",
+            "Best Candidate Address",
+        ]
+        rows = [
+            {"profile_name": "A", "address 1": "1 X",
+             "Match Category": "INVALID_CATEGORY", "Match Score": "0.3",
+             "Best Candidate Elector No.": "", "Best Candidate Name": "",
+             "Best Candidate Address": ""},
+        ]
+        unmatched_path = self._write_unmatched_csv(rows, headers)
+
+        fd, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        Path(report_path).write_text(
+            "### MACHINE-READABLE SECTION ###\n"
+            "SUMMARY|Source=canvassing|Total=5|Confident=4"
+            "|Possible=0|Ambiguous=0|Unmatched=1\n"
+            "### END MACHINE-READABLE SECTION ###\n",
+            encoding="utf-8",
+        )
+
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--report", report_path,
+            "--elections", "GE2024", "2026",
+            "--unmatched", unmatched_path,
+        ])
+
+        report_lines = read_report(stdout)
+        cat_lines = [l for l in report_lines
+                    if "unmatched_match_categories" in l]
+        self.assertTrue(any("Level=WARN" in l for l in cat_lines))
+
+        for p in [unmatched_path, report_path, base_path, output_path]:
+            os.unlink(p)
+
+    def test_nonexistent_unmatched_passes(self):
+        """No unmatched file and no SUMMARY data -> no unmatched checks."""
+        output_rows = make_enriched_rows(SAMPLE_BASE_ROWS, [
+            {"GE2024 Party": "G"}, {}, {},
+        ])
+        base_path = write_temp_csv(SAMPLE_BASE_ROWS, BASE_HEADERS)
+        output_path = write_temp_csv(output_rows, ENRICHED_HEADERS)
+
+        rc, stdout, _ = run_validate(output_path, [
+            "--base", base_path, "--elections", "GE2024", "2026",
+        ])
+
+        # No unmatched_csv_valid FAIL should appear
+        report_lines = read_report(stdout)
+        unmatched_lines = [l for l in report_lines
+                          if "unmatched_csv_valid" in l]
+        for line in unmatched_lines:
+            self.assertNotIn("Level=FAIL", line)
+
+        for p in [base_path, output_path]:
+            os.unlink(p)
+
+
+# ---------------------------------------------------------------------------
+# TestSummaryParsing (new methods for TestReportParsing)
+# ---------------------------------------------------------------------------
+
+class TestSummaryParsing(unittest.TestCase):
+    """Tests for SUMMARY line parsing in enrichment reports."""
+
+    def test_summary_lines_parsed(self):
+        """SUMMARY lines are parsed into summaries dict."""
+        # Import parse function directly
+        sys.path.insert(0, str(SCRIPT_DIR))
+        from validate_enrichment import parse_enrichment_report
+
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        Path(path).write_text("\n".join([
+            "Human text",
+            "### MACHINE-READABLE SECTION ###",
+            "SUMMARY|Source=canvassing|Total=12|Confident=8"
+            "|Possible=2|Ambiguous=1|Unmatched=1",
+            "SUMMARY|Source=enriched_register|Total=100|Matched=90"
+            "|Unmatched=10|Possible=0|Ambiguous=0",
+            "### END MACHINE-READABLE SECTION ###",
+        ]), encoding="utf-8")
+
+        result = parse_enrichment_report(path)
+        self.assertIn("summaries", result)
+
+        cs = result["summaries"]["canvassing"]
+        self.assertEqual(cs["Total"], 12)
+        self.assertEqual(cs["Confident"], 8)
+        self.assertEqual(cs["Possible"], 2)
+        self.assertEqual(cs["Ambiguous"], 1)
+        self.assertEqual(cs["Unmatched"], 1)
+
+        er = result["summaries"]["enriched_register"]
+        self.assertEqual(er["Total"], 100)
+        self.assertEqual(er["Matched"], 90)
+
+        os.unlink(path)
+
+    def test_old_report_without_summary(self):
+        """Old reports without SUMMARY lines parse with empty summaries."""
+        sys.path.insert(0, str(SCRIPT_DIR))
+        from validate_enrichment import parse_enrichment_report
+
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        Path(path).write_text("\n".join([
+            "### MACHINE-READABLE SECTION ###",
+            "MATCH|Source=enriched_register|Status=confident"
+            "|ERName=A|BaseName=A|PostCode=NW1|Score=0.9",
+            "### END MACHINE-READABLE SECTION ###",
+        ]), encoding="utf-8")
+
+        result = parse_enrichment_report(path)
+        self.assertEqual(result["summaries"], {})
+
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# TestEndToEndWithAccounting (extends e2e)
+# ---------------------------------------------------------------------------
+
+class TestEndToEndWithAccounting(unittest.TestCase):
+    """End-to-end: enrich then validate with canvassing accounting."""
+
+    def test_enrich_then_validate_with_canvassing_accounting(self):
+        """Full pipeline with canvassing accounting validation."""
+        tmpdir = tempfile.mkdtemp()
+        output_path = os.path.join(tmpdir, "enriched.csv")
+        report_path = os.path.join(tmpdir, "enriched.csv.report.txt")
+
+        # Step 1: Run enrichment with canvassing export
+        enrich_cmd = [
+            sys.executable, str(ENRICH_TOOL),
+            str(BASE_CSV), output_path,
+            "--canvassing-export", str(CANVASSING_CSV),
+            "--historic-elections", "GE2024",
+            "--future-elections", "2026",
+            "--report", report_path,
+            "--quiet",
+        ]
+        enrich_result = subprocess.run(enrich_cmd, capture_output=True,
+                                        text=True)
+        self.assertEqual(enrich_result.returncode, 0,
+                         f"Enrichment failed: {enrich_result.stderr}")
+
+        # Verify report has SUMMARY lines
+        report_text = Path(report_path).read_text(encoding="utf-8")
+        self.assertIn("SUMMARY|Source=canvassing", report_text)
+
+        # Step 2: Run validation with canvassing accounting
+        validate_args = [
+            "--base", str(BASE_CSV),
+            "--report", report_path,
+            "--elections", "GE2024", "2026",
+            "--canvassing-export", str(CANVASSING_CSV),
+        ]
+
+        # Add unmatched CSV if it exists
+        unmatched_candidate = os.path.join(tmpdir, "enriched.unmatched.csv")
+        if os.path.exists(unmatched_candidate):
+            validate_args.extend(["--unmatched", unmatched_candidate])
+
+        rc, stdout, stderr = run_validate(output_path, validate_args)
+
+        # Accounting checks should be present
+        self.assertIn("canvassing_accounting", stdout)
+        self.assertIn("canvassing_csv_count", stdout)
+
+        # Should have FAILED=0 for accounting
+        report_lines = read_report(stdout)
+        accounting_lines = [l for l in report_lines
+                           if "canvassing_accounting" in l
+                           or "canvassing_csv_count" in l
+                           or "canvassing_cross_check" in l]
+        for line in accounting_lines:
+            self.assertIn("Level=PASS", line,
+                         f"Expected PASS but got: {line}")
+
+
 if __name__ == "__main__":
     unittest.main()
