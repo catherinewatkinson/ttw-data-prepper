@@ -2917,14 +2917,21 @@ def run_verification(args):
     print()
 
     results = {"pass": 0, "fail": 0, "warn": 0}
+    MAX_DETAIL = 10  # max examples to show per check
 
-    def report(status, label, detail=""):
+    def report(status, label, detail="", examples=None):
         tag = {"pass": "[PASS]", "fail": "[FAIL]", "warn": "[WARN]"}[status]
         results[status] += 1
         msg = f"{tag} {label}"
         if detail:
             msg += f": {detail}"
         print(msg)
+        if examples and status in ("fail", "warn"):
+            shown = examples[:MAX_DETAIL]
+            for ex in shown:
+                print(f"       {ex}")
+            if len(examples) > MAX_DETAIL:
+                print(f"       ... and {len(examples) - MAX_DETAIL} more")
 
     # Read output file
     try:
@@ -2981,7 +2988,8 @@ def run_verification(args):
         report("pass", "Full Elector No. Format", "All match Prefix-No-Suffix")
     else:
         report("fail", "Full Elector No. Format",
-            f"{len(bad_fen)} malformed (first: row {bad_fen[0][0]}: '{bad_fen[0][1]}')")
+            f"{len(bad_fen)} malformed",
+            examples=[f"Row {row}: '{val}'" for row, val in bad_fen])
 
     # Check Full Elector No. uniqueness
     from collections import Counter
@@ -2990,7 +2998,8 @@ def run_verification(args):
     if not dups:
         report("pass", "Unique Elector Numbers", f"All {len(out_rows)} Full Elector No. values unique")
     else:
-        report("fail", "Unique Elector Numbers", f"{len(dups)} duplicates")
+        report("fail", "Unique Elector Numbers", f"{len(dups)} duplicates",
+            examples=[f"'{k}' appears {v} times" for k, v in sorted(dups.items())])
 
     # Check election field values are in TTW format
     election_cols = [h for h in out_headers if h.endswith(" Voted")]
@@ -3005,8 +3014,8 @@ def run_verification(args):
             report("pass", "Voted Values", "All Voted values are 'Y' or blank")
         else:
             report("fail", "Voted Values",
-                f"{len(bad_voted)} invalid (expected 'Y' or blank, "
-                f"first: row {bad_voted[0][0]} {bad_voted[0][1]}='{bad_voted[0][2]}')")
+                f"{len(bad_voted)} invalid (expected 'Y' or blank)",
+                examples=[f"Row {row}: {col}='{val}'" for row, col, val in bad_voted])
 
     postal_cols = [h for h in out_headers if h.endswith(" Postal Voter")]
     bad_postal = []
@@ -3020,8 +3029,8 @@ def run_verification(args):
             report("pass", "Postal Voter Values", "All Postal Voter values are 'Y' or blank")
         else:
             report("fail", "Postal Voter Values",
-                f"{len(bad_postal)} invalid (expected 'Y' or blank, "
-                f"first: row {bad_postal[0][0]} {bad_postal[0][1]}='{bad_postal[0][2]}')")
+                f"{len(bad_postal)} invalid (expected 'Y' or blank)",
+                examples=[f"Row {row}: {col}='{val}'" for row, col, val in bad_postal])
 
     party_cols = [h for h in out_headers if h.endswith(" Party")]
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -3037,8 +3046,8 @@ def run_verification(args):
             report("pass", "Party Codes", "All Party values are valid TTW codes or blank")
         else:
             report("warn", "Party Codes",
-                f"{len(bad_party)} unrecognized code(s) "
-                f"(first: row {bad_party[0][0]} {bad_party[0][1]}='{bad_party[0][2]}')")
+                f"{len(bad_party)} unrecognized code(s)",
+                examples=[f"Row {row}: {col}='{val}'" for row, col, val in bad_party])
 
     gvi_cols = [h for h in out_headers if h.endswith(" Green Voting Intention")]
     valid_gvi = {"1", "2", "3", "4", "5", ""}
@@ -3053,8 +3062,8 @@ def run_verification(args):
             report("pass", "Voting Intention", "All GVI values are 1-5 or blank")
         else:
             report("fail", "Voting Intention",
-                f"{len(bad_gvi)} invalid (expected 1-5 or blank, "
-                f"first: row {bad_gvi[0][0]} {bad_gvi[0][1]}='{bad_gvi[0][2]}')")
+                f"{len(bad_gvi)} invalid (expected 1-5 or blank)",
+                examples=[f"Row {row}: {col}='{val}'" for row, col, val in bad_gvi])
 
     # Check no empty rows
     empty_rows = [i + 2 for i, r in enumerate(out_rows)
@@ -3062,7 +3071,8 @@ def run_verification(args):
     if not empty_rows:
         report("pass", "No Empty Rows", "All rows have data")
     else:
-        report("fail", "No Empty Rows", f"{len(empty_rows)} empty rows")
+        report("fail", "No Empty Rows", f"{len(empty_rows)} empty rows",
+            examples=[f"Row {r}" for r in empty_rows])
 
     # If input file provided, do cross-file validation
     if args.input:
@@ -3122,7 +3132,8 @@ def run_verification(args):
                 f"All {len(out_names)} output names traceable to input")
         else:
             report("warn", "Name Preservation",
-                f"{len(name_diff)} input names not found in output (expected {deleted})")
+                f"{len(name_diff)} input names not found in output (expected {deleted})",
+                examples=[f"{fn} {sn}" for fn, sn in sorted(name_diff)])
 
         # PD completeness
         in_pd_counts = Counter(r.get("PDCode", "").strip() for r in in_rows)
@@ -3136,7 +3147,8 @@ def run_verification(args):
             report("pass", "PD Completeness",
                 f"All {len(in_pd_counts)} polling districts accounted for")
         else:
-            report("fail", "PD Completeness", "; ".join(pd_issues[:5]))
+            report("fail", "PD Completeness", f"{len(pd_issues)} polling districts with issues",
+                examples=pd_issues)
 
     # Summary
     print()
