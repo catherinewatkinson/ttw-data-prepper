@@ -819,7 +819,8 @@ class TestQAReport(unittest.TestCase):
         self.assertIn("### MACHINE-READABLE SECTION ###", text)
         self.assertIn("### END MACHINE-READABLE SECTION ###", text)
         # All machine lines should start with a known prefix
-        valid_prefixes = ("CONFLICT", "WARNING", "MATCH", "OVERWRITE", "SUMMARY")
+        valid_prefixes = ("CONFLICT", "WARNING", "MATCH", "OVERWRITE", "SUMMARY",
+                          "MERGE_CLASH", "MERGE_CLASH_CE")
         for line in machine:
             self.assertTrue(
                 any(line.startswith(p) for p in valid_prefixes),
@@ -881,7 +882,7 @@ class TestEdgeCases(unittest.TestCase):
         self.assertEqual(len(out_rows), 20)
 
     def test_duplicate_canvassing_visits(self):
-        """Two canvassing rows match same base row: last one used, warning logged."""
+        """Two canvassing rows match same base row: most recent used, gaps merged."""
         # Kim Kardashian has two visits in the canvassing CSV
         rc, out, err = run_enrich(
             BASE_CSV, self.output,
@@ -1370,6 +1371,8 @@ class TestAddressNormalization(unittest.TestCase):
             ce_ambiguous = []
             ce_unmatched = []
             ce_duplicate_visits = []
+            ce_merge_clashes = []
+            ce_merge_count = 0
             ce_unmatched_rows = []
             warnings = []
 
@@ -1400,6 +1403,8 @@ class TestAddressNormalization(unittest.TestCase):
             ce_ambiguous = []
             ce_unmatched = []
             ce_duplicate_visits = []
+            ce_merge_clashes = []
+            ce_merge_count = 0
             ce_unmatched_rows = []
             warnings = []
 
@@ -1825,19 +1830,22 @@ class TestERDuplicateMerge(unittest.TestCase):
         self.assertEqual(core_clashes, [],
                          "Core fields should never appear in merge clashes")
 
-    def test_ce_duplicate_still_last_wins(self):
-        """Regression: canvassing export duplicates still use last-wins."""
+    def test_ce_duplicate_most_recent_wins(self):
+        """Two CE visits with timestamps: most recent visit's data wins."""
         ce_headers = ["profile_name", "address 1", "address 2", "address 3",
-                      "address 4", "visit_previously_voted_for", "visit_notes"]
+                      "address 4", "visit_previously_voted_for", "visit_notes",
+                      "visit_visited_at"]
         ce_rows = [
             {"profile_name": "Emily Johnson", "address 1": "Flat 1",
              "address 2": "22 Willesden Lane", "address 3": "",
              "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
-             "visit_notes": "First visit"},
+             "visit_notes": "First visit",
+             "visit_visited_at": "2025-06-20 10:00:00"},
             {"profile_name": "Emily Johnson", "address 1": "Flat 1",
              "address 2": "22 Willesden Lane", "address 3": "",
              "address 4": "NW10 4QB", "visit_previously_voted_for": "LABOUR",
-             "visit_notes": "Second visit"},
+             "visit_notes": "Second visit",
+             "visit_visited_at": "2025-06-24 14:00:53"},
         ]
         ce_path = write_temp_csv(ce_rows, ce_headers)
         try:
@@ -1849,8 +1857,353 @@ class TestERDuplicateMerge(unittest.TestCase):
             self.assertEqual(rc, 0, f"Script failed: {err}")
             headers, rows = read_output_csv(self.output)
             emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
-            # Last visit wins for canvassing export
+            # Most recent visit (2025-06-24) wins — LABOUR
             self.assertEqual(emily["GE2024 Party"], "Lab")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_duplicate_fills_gaps_from_older(self):
+        """Most recent visit has Party but no visit_notes. Older fills the gap."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "visit_notes",
+                      "visit_visited_at"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "Likes leaflets",
+             "visit_visited_at": "2025-06-20 10:00:00"},
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "LABOUR",
+             "visit_notes": "",
+             "visit_visited_at": "2025-06-24 14:00:53"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # Most recent wins for Party
+            self.assertEqual(emily["GE2024 Party"], "Lab")
+            # Gap filled from older visit for visit_notes
+            self.assertEqual(emily["visit_notes"], "Likes leaflets")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_duplicate_clash_logged(self):
+        """Both visits have different visit_notes. Most recent wins, clash logged."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "visit_notes",
+                      "visit_visited_at"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "Likes leaflets",
+             "visit_visited_at": "2025-06-20 10:00:00"},
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "LABOUR",
+             "visit_notes": "Out canvassing",
+             "visit_visited_at": "2025-06-24 14:00:53"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            text, machine = read_report(self.report)
+            # Clash should be logged (both visit_notes and visit_previously_voted_for differ)
+            self.assertIn("Merge clashes (need review)", text)
+            # Machine-readable section should have MERGE_CLASH_CE entries
+            ce_clashes = [l for l in machine if l.startswith("MERGE_CLASH_CE")]
+            self.assertTrue(len(ce_clashes) > 0, "Expected MERGE_CLASH_CE entries")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_duplicate_no_timestamp_first_wins(self):
+        """No visit_visited_at: first visit is primary, gaps filled from later."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "visit_notes"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": ""},
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "LABOUR",
+             "visit_notes": "Second visit notes"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # No timestamps: stable sort, first wins for Party (GREEN)
+            self.assertEqual(emily["GE2024 Party"], "G")
+            # Gap filled from second visit for visit_notes
+            self.assertEqual(emily["visit_notes"], "Second visit notes")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_duplicate_mixed_timestamps(self):
+        """Mixed timestamps: timestamped visit takes priority over non-timestamped."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "visit_visited_at"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "LABOUR",
+             "visit_visited_at": ""},
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_visited_at": "2025-06-24 14:00:53"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # Timestamped visit (GREEN) takes priority over non-timestamped (LABOUR)
+            self.assertEqual(emily["GE2024 Party"], "G")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_duplicate_three_visits(self):
+        """Three CE visits: most recent primary, progressive gap-fill from older."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "visit_notes",
+                      "visit_issues", "visit_visited_at"]
+        ce_rows = [
+            # Visit A (oldest) — has visit_notes and visit_issues
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "CONSERVATIVE",
+             "visit_notes": "Has a dog", "visit_issues": "Transport",
+             "visit_visited_at": "2025-06-15 09:00:00"},
+            # Visit B (middle) — has visit_issues but no visit_notes
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "", "visit_issues": "Housing",
+             "visit_visited_at": "2025-06-20 10:00:00"},
+            # Visit C (most recent) — has Party only
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "LABOUR",
+             "visit_notes": "", "visit_issues": "",
+             "visit_visited_at": "2025-06-24 14:00:53"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # Most recent (C) wins for Party
+            self.assertEqual(emily["GE2024 Party"], "Lab")
+            # visit_issues gap-filled from B (middle visit)
+            self.assertEqual(emily["visit_issues"], "Housing")
+            # visit_notes gap-filled from A (oldest — B was empty)
+            self.assertEqual(emily["visit_notes"], "Has a dog")
+            # Report should show clashes
+            text, machine = read_report(self.report)
+            ce_clashes = [l for l in machine if l.startswith("MERGE_CLASH_CE")]
+            # Party clashes: C vs B (Lab vs Green), and visit_issues: B vs A (Housing vs Transport)
+            self.assertTrue(len(ce_clashes) >= 2,
+                            f"Expected at least 2 CE clashes, got {len(ce_clashes)}: {ce_clashes}")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_duplicate_protects_core_fields(self):
+        """Duplicate visit with different address: address NOT merged, enrichment IS."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "visit_notes",
+                      "visit_visited_at"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "",
+             "visit_visited_at": "2025-06-24 14:00:53"},
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1A",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "",
+             "visit_notes": "Has a dog",
+             "visit_visited_at": "2025-06-20 10:00:00"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # visit_notes gap-filled from older visit
+            self.assertEqual(emily["visit_notes"], "Has a dog")
+            # Verify no address clash was logged (core fields are skipped)
+            text, machine = read_report(self.report)
+            ce_clashes = [l for l in machine if l.startswith("MERGE_CLASH_CE")]
+            addr_clashes = [c for c in ce_clashes if "address" in c.lower()]
+            self.assertEqual(len(addr_clashes), 0, "Address fields should not produce clashes")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_1_5_maps_to_future_gvi(self):
+        """1-5 value from CE maps to future election GVI column."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "1-5"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "",
+             "1-5": "2"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--future-elections", "2026",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            self.assertEqual(emily["2026 Green Voting Intention"], "2")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_1_5_invalid_value_warned(self):
+        """Invalid 1-5 value produces warning and is skipped."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "1-5"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "",
+             "1-5": "6"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--future-elections", "2026",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # Invalid value should not be set
+            self.assertEqual(emily.get("2026 Green Voting Intention", ""), "")
+            # Warning should be in report
+            text, _ = read_report(self.report)
+            self.assertIn("invalid 1-5 value '6'", text)
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_comments_merged(self):
+        """Comments from CE appears in output."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "Comments"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "",
+             "Comments": "Keen supporter"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            self.assertEqual(emily.get("Comments", ""), "Keen supporter")
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_comments_ce_only_header(self):
+        """CE-only run (no ER/CR) with Comments: column appears in output headers."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "Comments"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "",
+             "Comments": "Test comment"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, _ = read_output_csv(self.output)
+            self.assertIn("Comments", headers)
+        finally:
+            os.unlink(ce_path)
+
+    def test_ce_comments_overwrites_er(self):
+        """When both ER and CE have Comments, CE wins with overwrite logged."""
+        # CE with Comments
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "Comments"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "",
+             "Comments": "CE comment"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--enriched-register", str(REGISTER_CSV),
+                 "--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # CE should overwrite ER's Comments
+            self.assertEqual(emily.get("Comments", ""), "CE comment")
+            # Overwrite should be logged
+            text, machine = read_report(self.report)
+            overwrites = [l for l in machine if l.startswith("OVERWRITE") and "Comments" in l]
+            self.assertTrue(len(overwrites) > 0, "Expected OVERWRITE entry for Comments")
         finally:
             os.unlink(ce_path)
 

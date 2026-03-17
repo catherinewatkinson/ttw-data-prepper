@@ -67,6 +67,15 @@ _ER_CORE_FIELDS = frozenset([
     "MethodOfVerification",
 ])
 
+# Core identity/address/visit-metadata fields in canvassing export that must NOT
+# be merged during CE duplicate resolution — only enrichment data should be merged.
+_CE_CORE_FIELDS = frozenset([
+    "profile_name",
+    "address 1", "address 2", "address 3", "address 4", "address 5",
+    "visit_visited_at",
+    "visit_attempt_status", "visit_result_status",
+])
+
 
 # ---------------------------------------------------------------------------
 # QA Report for enrichment
@@ -117,6 +126,8 @@ class EnrichQAReport:
         self.ce_ambiguous = []      # [(profile_name, addr, [(name, score)])]
         self.ce_unmatched = []      # [(profile_name, addr, best_score)]
         self.ce_duplicate_visits = [] # [(base_key, count)]
+        self.ce_merge_clashes = []  # [(name, field, kept_val, discarded_val)]
+        self.ce_merge_count = 0     # number of CE fields gap-filled from older visits
         self.ce_unmatched_rows = []  # [dict] full rows for unmatched CSV export
         self.ce_headers = []         # original DS3 column order
         self.ce_has_dnk = False      # True if DS3 CSV has a DNK column
@@ -219,9 +230,13 @@ class EnrichQAReport:
                     else:
                         lines.append(f"    \"{profile_name}\" ({addr}) no candidates")
             if self.ce_duplicate_visits:
-                lines.append(f"Duplicate canvassing visits: {len(self.ce_duplicate_visits)}")
-                for key, count in self.ce_duplicate_visits:
-                    lines.append(f"    Base row {key}: {count} visits (last used)")
+                lines.append(f"  Duplicate canvassing visits (merged): {len(self.ce_duplicate_visits)}")
+                if self.ce_merge_count:
+                    lines.append(f"  Gap fills from older visits: {self.ce_merge_count}")
+            if self.ce_merge_clashes:
+                lines.append(f"  Merge clashes (need review): {len(self.ce_merge_clashes)}")
+                for name, field, kept, discarded in self.ce_merge_clashes:
+                    lines.append(f"    {name}: {field} kept=\"{kept}\" discarded=\"{discarded}\"")
             if self.unmatched_csv_path:
                 lines.append(f"Unmatched rows exported to: {self.unmatched_csv_path}")
             lines.append("")
@@ -360,6 +375,9 @@ class EnrichQAReport:
         for name, postcode, field, kept, discarded in self.er_merge_clashes:
             lines.append(f"MERGE_CLASH|Name={name}|PostCode={postcode}"
                          f"|Field={field}|Kept={kept}|Discarded={discarded}")
+        for name, field, kept, discarded in self.ce_merge_clashes:
+            lines.append(f"MERGE_CLASH_CE|Name={name}|Field={field}"
+                         f"|Kept={kept}|Discarded={discarded}")
         if self.canvassing_export_file:
             lines.append(f"SUMMARY|Source=canvassing|Total={self.ce_total}"
                          f"|Confident={self.ce_confident}"
@@ -571,6 +589,28 @@ def _merge_er_rows(primary, secondary, display_name, postcode, report):
             # Clash: keep primary, log for manual review
             report.er_merge_clashes.append(
                 (display_name, postcode, key, pri_val, sec_val))
+
+
+def _merge_ce_rows(primary, secondary, display_name, report):
+    """Fill gaps in primary CE row from secondary (older visit). Log clashes.
+
+    Only merges canvassing enrichment fields — identity/address/visit-metadata
+    fields (profile_name, address 1-5, visit_visited_at,
+    visit_attempt_status, visit_result_status) are skipped.
+    """
+    for key in secondary:
+        if key in _CE_CORE_FIELDS:
+            continue  # Never merge identity/address/visit-metadata fields
+        sec_val = secondary[key].strip() if secondary[key] else ""
+        if not sec_val:
+            continue
+        pri_val = primary.get(key, "").strip() if primary.get(key) else ""
+        if not pri_val:
+            primary[key] = secondary[key]
+            report.ce_merge_count += 1
+        elif pri_val != sec_val:
+            report.ce_merge_clashes.append(
+                (display_name, key, pri_val, sec_val))
 
 
 def match_enriched_register(base_rows, er_rows, threshold, report):
@@ -857,13 +897,31 @@ def match_canvassing_export(base_rows, ce_rows, threshold, report):
     # Check for duplicate canvassing visits (multiple ce rows matching same base)
     for base_idx, ce_indices in base_match_count.items():
         if len(ce_indices) > 1:
-            # Take the last one (most recent visit)
-            last_ce_idx = ce_indices[-1]
-            matched[base_idx] = ce_rows[last_ce_idx]
             base_name = f"{base_rows[base_idx].get('Forename', '')} {base_rows[base_idx].get('Surname', '')}".strip()
+
+            # Sort by visit_visited_at descending (most recent first).
+            # ISO timestamps (e.g. 2025-06-24 14:00:53) sort correctly as strings.
+            # Rows without timestamps get "" which sorts last with reverse=True
+            # (after all real timestamps), so timestamped rows always take priority.
+            def _visit_sort_key(idx):
+                ts = ce_rows[idx].get("visit_visited_at", "").strip()
+                return ts if ts else ""
+
+            sorted_indices = sorted(ce_indices, key=_visit_sort_key, reverse=True)
+
+            # Most recent is primary; fill gaps from older visits
+            clashes_before = len(report.ce_merge_clashes)
+            primary_row = dict(ce_rows[sorted_indices[0]])  # copy to avoid mutating input
+            for older_idx in sorted_indices[1:]:
+                _merge_ce_rows(primary_row, ce_rows[older_idx], base_name, report)
+
+            matched[base_idx] = primary_row
             report.ce_duplicate_visits.append((base_name, len(ce_indices)))
-            report.warnings.append(
-                f"Canvassing: {len(ce_indices)} visits matched base row \"{base_name}\", last used")
+            # Only warn when clashes found (matches ER pattern to reduce noise)
+            if len(report.ce_merge_clashes) > clashes_before:
+                report.warnings.append(
+                    f"Canvassing: {len(ce_indices)} visits matched base row \"{base_name}\", "
+                    f"most recent used, merged with clashes")
 
     return matched
 
@@ -937,7 +995,17 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
 
         _set_field(row, postal_key, postal, row_key, report)
         _set_field(row, party_key, "", row_key, report)
-        _set_field(row, gvi_key, "", row_key, report)
+
+        # 1-5 from CE -> Green Voting Intention (future elections only)
+        ce_gvi = ""
+        if ce_match:
+            ce_gvi_raw = ce_match.get("1-5", "").strip()
+            if ce_gvi_raw in {"1", "2", "3", "4", "5"}:
+                ce_gvi = ce_gvi_raw
+            elif ce_gvi_raw:
+                report.warnings.append(
+                    f"Canvassing export row {row_key}: invalid 1-5 value '{ce_gvi_raw}', skipped")
+        _set_field(row, gvi_key, ce_gvi, row_key, report)
 
 
 # ---------------------------------------------------------------------------
@@ -972,6 +1040,10 @@ def add_extra_columns(row, er_match, ce_match, report):
         for col in EXTRA_COLS_CANVASSING:
             val = ce_match.get(col, "").strip()
             _set_field(row, col, val, row_key, report)
+        # Comments from CE (if present in CE data)
+        if "Comments" in ce_match:
+            comments_val = ce_match.get("Comments", "").strip()
+            _set_field(row, "Comments", comments_val, row_key, report)
         # Optional DNK from canvassing export (only if column exists in CE CSV)
         if report.ce_has_dnk:
             dnk_val = ce_match.get("DNK", "").strip()
@@ -1029,6 +1101,8 @@ def build_enrichment_headers(base_headers, historic_elections, future_elections,
         if has_ce:
             for col in EXTRA_COLS_CANVASSING:
                 _add_col(col)
+            # Comments from CE (safe to call unconditionally — _add_col deduplicates)
+            _add_col("Comments")
         if has_cr:
             for col in EXTRA_COLS_CANVASSING_REGISTER:
                 _add_col(col)
