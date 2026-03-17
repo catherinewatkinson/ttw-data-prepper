@@ -48,6 +48,25 @@ EXTRA_COLS_CANVASSING = ["visit_issues", "visit_notes"]
 # Extra columns from canvassing register (non-TTW)
 EXTRA_COLS_CANVASSING_REGISTER = ["Comments"]
 
+# Core identity/address fields in enriched register that must NOT be modified
+# during duplicate merge — only enrichment data columns should be merged.
+_ER_CORE_FIELDS = frozenset([
+    # Identity fields
+    "PDCode", "RollNo", "Forename", "Surname", "PostCode",
+    "ElectorSurname", "ElectorForename", "Full Name",
+    "Middle Names", "First Name", "Last Name",
+    "SubHouse", "ElectorID", "UPRN",
+    # Address fields
+    "RegisteredAddress1", "RegisteredAddress2", "RegisteredAddress3",
+    "RegisteredAddress4", "RegisteredAddress5", "RegisteredAddress6",
+    "Address1", "Address2", "Address3", "Address4", "Address5", "Address6",
+    "Post Code", "Postcode", "POSTCODE",
+    # Electoral structure / registration metadata
+    "FranchiseMarker", "DateOfAttainment", "Date of Attainment",
+    "Euro", "Parl", "Ward",
+    "MethodOfVerification",
+])
+
 
 # ---------------------------------------------------------------------------
 # QA Report for enrichment
@@ -72,6 +91,8 @@ class EnrichQAReport:
         self.er_ambiguous = []      # [(name, postcode, [(candidate_name, score)])]
         self.er_confident_matches = [] # [(er_name, base_name, postcode, score)]
         self.er_duplicate_keys = [] # [(name, postcode, count)]
+        self.er_merge_clashes = []  # [(name, postcode, field, kept_val, discarded_val)]
+        self.er_merge_count = 0     # number of ER rows merged (not discarded)
 
         # Canvassing register matching
         self.canvassing_register_file = ""
@@ -165,9 +186,15 @@ class EnrichQAReport:
                     cand_str = ", ".join(f"\"{n}\" ({s:.3f})" for n, s in candidates)
                     lines.append(f"    \"{name}\" ({postcode}): {cand_str}")
             if self.er_duplicate_keys:
-                lines.append("  Duplicate ER rows matching same base:")
-                for name, postcode, count in self.er_duplicate_keys:
-                    lines.append(f"    {name} ({postcode}): {count} occurrences (first used)")
+                lines.append(f"  Duplicate ER rows (merged): {len(self.er_duplicate_keys)}")
+                if self.er_merge_count:
+                    lines.append(f"  Gap fills from duplicates: {self.er_merge_count}")
+            if self.er_merge_clashes:
+                # Only list duplicates that had clashes — these need manual review
+                clash_names = set((n, p) for n, p, _, _, _ in self.er_merge_clashes)
+                lines.append(f"  Merge clashes (need review): {len(self.er_merge_clashes)}")
+                for name, postcode, field, kept, discarded in self.er_merge_clashes:
+                    lines.append(f"    {name} ({postcode}): {field} kept=\"{kept}\" discarded=\"{discarded}\"")
             lines.append("")
 
         # --- Canvassing Export Matching ---
@@ -330,6 +357,9 @@ class EnrichQAReport:
                              f"|PostCode={postcode}|Score={score:.3f}")
         for row_key, field, old, new in self.overwrite_details:
             lines.append(f"OVERWRITE|Row={row_key}|Field={field}|Old={old}|New={new}")
+        for name, postcode, field, kept, discarded in self.er_merge_clashes:
+            lines.append(f"MERGE_CLASH|Name={name}|PostCode={postcode}"
+                         f"|Field={field}|Kept={kept}|Discarded={discarded}")
         if self.canvassing_export_file:
             lines.append(f"SUMMARY|Source=canvassing|Total={self.ce_total}"
                          f"|Confident={self.ce_confident}"
@@ -476,6 +506,24 @@ def _extract_postcode(row_dict, field_order=("address 4", "address 3", "address 
 
 
 # ---------------------------------------------------------------------------
+# Flexible postal voter column lookup
+# ---------------------------------------------------------------------------
+
+_POSTAL_VOTER_KEYS = ["PostalVoter?", "PostalVoter", "Postal Voter",
+                      "postalvoter?", "postalvoter", "postal voter",
+                      "POSTALVOTER?", "POSTALVOTER", "POSTAL VOTER",
+                      "Postal voter", "postal Voter"]
+
+def _get_postal_voter(row):
+    """Get postal voter value from a row, accepting multiple column name variants."""
+    for key in _POSTAL_VOTER_KEYS:
+        val = row.get(key, "").strip()
+        if val:
+            return val
+    return ""
+
+
+# ---------------------------------------------------------------------------
 # Overwrite-safe field setter
 # ---------------------------------------------------------------------------
 
@@ -501,6 +549,29 @@ def _set_field(row, field, new_value, row_key, report):
 # ---------------------------------------------------------------------------
 # Fuzzy matching (enriched register)
 # ---------------------------------------------------------------------------
+
+def _merge_er_rows(primary, secondary, display_name, postcode, report):
+    """Fill gaps in primary from secondary. Log clashes.
+
+    Only merges enrichment data columns — core identity/address fields
+    (RollNo, Address1-6, SubHouse, ElectorID, UPRN, etc.) are skipped.
+    """
+    for key in secondary:
+        if key in _ER_CORE_FIELDS:
+            continue  # Never merge core electoral data
+        sec_val = secondary[key].strip() if secondary[key] else ""
+        if not sec_val:
+            continue  # Nothing to merge
+        pri_val = primary.get(key, "").strip() if primary.get(key) else ""
+        if not pri_val:
+            # Gap: fill from secondary
+            primary[key] = secondary[key]
+            report.er_merge_count += 1
+        elif pri_val != sec_val:
+            # Clash: keep primary, log for manual review
+            report.er_merge_clashes.append(
+                (display_name, postcode, key, pri_val, sec_val))
+
 
 def match_enriched_register(base_rows, er_rows, threshold, report):
     """Match enriched register rows to base by fuzzy name+postcode.
@@ -607,11 +678,16 @@ def match_enriched_register(base_rows, er_rows, threshold, report):
                         break
                 report.er_duplicate_keys.append(
                     (er_display_name, er_postcode, existing_count + 1))
-                report.warnings.append(
-                    f"Enriched register: duplicate match \"{er_display_name}\" "
-                    f"({er_postcode}) -> base \"{best_name}\" "
-                    f"({existing_count + 1} occurrences, first used)")
-                # Keep the first match (don't overwrite)
+                # Merge: fill gaps in existing match from this duplicate
+                clashes_before = len(report.er_merge_clashes)
+                _merge_er_rows(matched[best_idx], er_row, er_display_name, er_postcode, report)
+                # Only warn if clashes were found (different non-empty values)
+                if len(report.er_merge_clashes) > clashes_before:
+                    report.warnings.append(
+                        f"Enriched register: duplicate match \"{er_display_name}\" "
+                        f"({er_postcode}) -> base \"{best_name}\" "
+                        f"({existing_count + 1} occurrences, merged with clashes)")
+                # Don't increment er_matched — already counted
                 continue
             base_claimed[best_idx] = (er_idx, er_display_name)
             matched[best_idx] = er_row
@@ -846,7 +922,7 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
 
         postal = ""
         if er_match:
-            pv = er_match.get("PostalVoter?", "").strip()
+            pv = _get_postal_voter(er_match)
             if not pv:
                 pv = er_match.get("P/PB", "").strip()
             # Treat explicit "N"/"No" as blank (no postal vote)

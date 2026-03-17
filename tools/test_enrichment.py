@@ -208,17 +208,19 @@ class TestFuzzyRegisterMatch(unittest.TestCase):
         self.assertIn("Ghost Voter", text)
         self.assertIn("Phantom Resident", text)
 
-    def test_duplicate_key_takes_first_warns(self):
-        """Duplicate ER row Arun Patel: first row used, warning logged."""
+    def test_duplicate_key_merges_gaps(self):
+        """Duplicate ER row Arun Patel: rows merged (gaps filled)."""
         headers, rows = self._run_register_only()
         ka2_1 = [r for r in rows if r["Elector No. Prefix"] == "KA2"
                  and r["Elector No."] == "1"][0]
-        # First occurrence has empty Comments
-        self.assertEqual(ka2_1["Comments"], "")
-        # Check warning in report
+        # First row has empty Comments, second has "Updated" -> gap-filled
+        self.assertEqual(ka2_1["Comments"], "Updated")
+        # First row has empty 1st round, second has "Y" -> gap-filled
+        self.assertEqual(ka2_1["1st round"], "Y")
+        # Check duplicate count in report (no clashes so no per-entry warning)
         text, _ = read_report(self.report)
         self.assertIn("duplicate", text.lower())
-        self.assertIn("arun patel", text.lower())
+        self.assertIn("merged", text.lower())
 
     def test_match_rate_in_report_summary(self):
         """Report shows match rate."""
@@ -1681,6 +1683,174 @@ class TestCanvassingExportDNK(unittest.TestCase):
             self.assertEqual(rc, 0, f"Script failed: {err}")
             headers, _ = read_output_csv(self.output)
             self.assertNotIn("DNK", headers)
+        finally:
+            os.unlink(ce_path)
+
+
+# ---------------------------------------------------------------------------
+# TestERDuplicateMerge
+# ---------------------------------------------------------------------------
+
+class TestERDuplicateMerge(unittest.TestCase):
+    """Tests for enriched register duplicate merge (fill-gaps) behaviour."""
+
+    ER_HEADERS = ["Forename", "Surname", "PostCode", "GE24", "Party",
+                  "PostalVoter?", "Comments", "1st round"]
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.output = os.path.join(self.tmpdir, "output.csv")
+        self.report = os.path.join(self.tmpdir, "report.txt")
+
+    def _run(self, er_rows):
+        er_path = write_temp_csv(er_rows, self.ER_HEADERS)
+        try:
+            rc, out, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--enriched-register", er_path,
+                 "--historic-elections", "GE2024",
+                 "--future-elections", "2026",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+        finally:
+            os.unlink(er_path)
+        return read_output_csv(self.output)
+
+    def test_er_duplicate_merge_fills_gaps(self):
+        """Two ER rows match same base: Row A has Party but no PostalVoter,
+        Row B has PostalVoter but no Party. Output should have both."""
+        er_rows = [
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "v", "Party": "GREEN", "PostalVoter?": "", "Comments": "", "1st round": ""},
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "", "Party": "", "PostalVoter?": "Y", "Comments": "Contact again", "1st round": ""},
+        ]
+        headers, rows = self._run(er_rows)
+        emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        self.assertEqual(emily["GE2024 Party"], "G")
+        self.assertEqual(emily["2026 Postal Voter"], "Y")
+        self.assertEqual(emily["Comments"], "Contact again")
+
+    def test_er_duplicate_merge_clash_logged(self):
+        """Two ER rows with different Party: first wins, clash logged in report."""
+        er_rows = [
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "v", "Party": "GREEN", "PostalVoter?": "", "Comments": "", "1st round": ""},
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "v", "Party": "LABOUR", "PostalVoter?": "", "Comments": "", "1st round": ""},
+        ]
+        headers, rows = self._run(er_rows)
+        emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        # First row wins
+        self.assertEqual(emily["GE2024 Party"], "G")
+        # Clash logged in report
+        text, machine = read_report(self.report)
+        self.assertIn("merge clash", text.lower())
+        clash_lines = [l for l in machine if l.startswith("MERGE_CLASH")]
+        self.assertTrue(len(clash_lines) > 0, "Expected MERGE_CLASH in machine-readable section")
+        self.assertIn("Party", clash_lines[0])
+
+    def test_er_duplicate_merge_three_rows(self):
+        """Three ER rows: data fills progressively."""
+        er_rows = [
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "v", "Party": "GREEN", "PostalVoter?": "", "Comments": "", "1st round": ""},
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "", "Party": "", "PostalVoter?": "Y", "Comments": "", "1st round": ""},
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "", "Party": "", "PostalVoter?": "", "Comments": "Third row note", "1st round": "Y"},
+        ]
+        headers, rows = self._run(er_rows)
+        emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        self.assertEqual(emily["GE2024 Party"], "G")
+        self.assertEqual(emily["2026 Postal Voter"], "Y")
+        self.assertEqual(emily["Comments"], "Third row note")
+        self.assertEqual(emily["1st round"], "Y")
+
+    def test_er_duplicate_merge_preserves_first_nonempty(self):
+        """When first row has a value and second also has one, first is kept."""
+        er_rows = [
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "v", "Party": "GREEN", "PostalVoter?": "Y", "Comments": "First", "1st round": ""},
+            {"Forename": "Emily", "Surname": "Johnson", "PostCode": "NW10 4QB",
+             "GE24": "v", "Party": "LABOUR", "PostalVoter?": "", "Comments": "Second", "1st round": ""},
+        ]
+        headers, rows = self._run(er_rows)
+        emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        # First values kept
+        self.assertEqual(emily["GE2024 Party"], "G")
+        self.assertEqual(emily["2026 Postal Voter"], "Y")
+        self.assertEqual(emily["Comments"], "First")
+
+    def test_er_duplicate_merge_protects_core_fields(self):
+        """Core electoral fields (RollNo, PostCode etc.) in the ER row are never
+        modified by duplicate merge, even if the duplicate has different values.
+        Only enrichment columns are merged."""
+        er_headers = ["RollNo", "Forename", "Surname", "PostCode", "GE24", "Party",
+                      "PostalVoter?", "Comments", "1st round"]
+        er_rows = [
+            # First row: same name/postcode so both match Emily Johnson
+            {"RollNo": "1", "Forename": "Emily", "Surname": "Johnson",
+             "PostCode": "NW10 4QB", "GE24": "v", "Party": "GREEN",
+             "PostalVoter?": "", "Comments": "", "1st round": ""},
+            # Duplicate: same name/postcode (matches same base), but different
+            # RollNo (core field) and useful enrichment data
+            {"RollNo": "99", "Forename": "Emily", "Surname": "Johnson",
+             "PostCode": "NW10 4QB", "GE24": "", "Party": "",
+             "PostalVoter?": "Y", "Comments": "From duplicate", "1st round": "Y"},
+        ]
+        er_path = write_temp_csv(er_rows, er_headers)
+        try:
+            rc, out, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--enriched-register", er_path,
+                 "--historic-elections", "GE2024",
+                 "--future-elections", "2026",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+        finally:
+            os.unlink(er_path)
+        headers, rows = read_output_csv(self.output)
+        emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+        # Enrichment data gap-filled from duplicate
+        self.assertEqual(emily["2026 Postal Voter"], "Y")
+        self.assertEqual(emily["Comments"], "From duplicate")
+        self.assertEqual(emily["1st round"], "Y")
+        # No clash warnings for core fields (they were skipped, not compared)
+        text, machine = read_report(self.report)
+        clash_lines = [l for l in machine if l.startswith("MERGE_CLASH")]
+        core_clashes = [l for l in clash_lines
+                        if "RollNo" in l or "Forename" in l
+                        or "Surname" in l or "PostCode" in l]
+        self.assertEqual(core_clashes, [],
+                         "Core fields should never appear in merge clashes")
+
+    def test_ce_duplicate_still_last_wins(self):
+        """Regression: canvassing export duplicates still use last-wins."""
+        ce_headers = ["profile_name", "address 1", "address 2", "address 3",
+                      "address 4", "visit_previously_voted_for", "visit_notes"]
+        ce_rows = [
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "GREEN",
+             "visit_notes": "First visit"},
+            {"profile_name": "Emily Johnson", "address 1": "Flat 1",
+             "address 2": "22 Willesden Lane", "address 3": "",
+             "address 4": "NW10 4QB", "visit_previously_voted_for": "LABOUR",
+             "visit_notes": "Second visit"},
+        ]
+        ce_path = write_temp_csv(ce_rows, ce_headers)
+        try:
+            rc, _, err = run_enrich(
+                BASE_CSV, self.output,
+                ["--canvassing-export", ce_path,
+                 "--historic-elections", "GE2024",
+                 "--report", self.report])
+            self.assertEqual(rc, 0, f"Script failed: {err}")
+            headers, rows = read_output_csv(self.output)
+            emily = [r for r in rows if r["Full Elector No."] == "KA1-1-0"][0]
+            # Last visit wins for canvassing export
+            self.assertEqual(emily["GE2024 Party"], "Lab")
         finally:
             os.unlink(ce_path)
 

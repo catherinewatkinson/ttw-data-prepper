@@ -188,7 +188,8 @@ ENRICHMENT_EXTRA_COLUMNS = [
 ]
 
 # Enrichment source columns (mapped to TTW election columns)
-ENRICHMENT_SOURCE_COLUMNS = ["GE24", "Party", "1-5", "PostalVoter?"]
+ENRICHMENT_SOURCE_COLUMNS = ["GE24", "Party", "1-5", "PostalVoter?",
+                             "PostalVoter", "Postal Voter", "Postal voter"]
 
 # TTW headers that indicate a file-swap
 TTW_INDICATOR_HEADERS = {"Elector No. Prefix", "Full Elector No.", "Elector No. Suffix"}
@@ -1122,8 +1123,15 @@ def map_enriched_election_data(row, council_row, elections, election_types,
                 gvi_val = ""
             row[gvi_key] = gvi_val
 
-            # PostalVoter? -> Postal Voter: TTW expects "Y" or blank
-            postal_raw = council_row.get("PostalVoter?", "").strip()
+            # PostalVoter? / PostalVoter / Postal Voter -> TTW "Y" or blank
+            postal_raw = ""
+            for _pv_key in ("PostalVoter?", "PostalVoter", "Postal Voter",
+                            "postalvoter?", "postalvoter", "postal voter",
+                            "POSTALVOTER?", "POSTALVOTER", "POSTAL VOTER",
+                            "Postal voter", "postal Voter"):
+                postal_raw = council_row.get(_pv_key, "").strip()
+                if postal_raw:
+                    break
             # Treat explicit "N"/"No" as blank (no postal vote)
             if postal_raw.upper() in ("N", "NO"):
                 postal_raw = ""

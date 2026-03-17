@@ -4,7 +4,7 @@ KA1,2,0,KA1-2-0,Kardashian,Kim,,33 Willesden Lane,,,,,,NW10 4QB,100002,,Lab,Y,,,
 KA1,3,0,KA1-3-0,Van Der Berg,Anna,Marie,45 Chamberlayne Road,,,,,,NW10 3JH,100003,,Con,,,,Y,anna@example.com,,,,,Y,
 KA1,4,0,KA1-4-0,O'Brien-Smythe,Sarah,Jane,12 Kilburn High Road,,,,,,NW6 5UA,100004,,G,Y,,,,,07700900004,Active member,,,,
 KA1,5,0,KA1-5-0,Wu,Li,,Flat 3,88 Brondesbury Road,,,,,NW6 6BX,100005,,LD,Y,,,,,,,,,,4
-KA2,1,0,KA2-1-0,Patel,Arun,Kumar,7 Mapesbury Road,,,,,,NW2 4HT,100006,,Lab,Y,,,,,07700900006,,Housing,,,
+KA2,1,0,KA2-1-0,Patel,Arun,Kumar,7 Mapesbury Road,,,,,,NW2 4HT,100006,,Lab,Y,,,,,07700900006,Updated,Housing,Housing,,Y
 KA2,2,0,KA2-2-0,Patel,Priya,Devi,7 Mapesbury Road,,,,,,NW2 4HT,100007,,,,,,,,,,,,,
 KA2,3,0,KA2-3-0,Patel,Rajan,,7 Mapesbury Road,,,,,,NW2 4HT,100008,,G,Y,,,Y,rajan@example.com,07700900008,,,,Y,
 KA2,4,0,KA2-4-0,Okonkwo,Chioma,,15 Exeter Road,,,,,,NW2 4SE,100009,,Lab,Y,,,,,,,,,,3
