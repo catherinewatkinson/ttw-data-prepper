@@ -716,7 +716,7 @@ def generate_realistic_messy_data():
         RegisteredAddress1="[100-102]", RegisteredAddress2="Chamberlayne Road",
         PostCode="NW10 3JU"))
 
-    # --- ISSUE: SubHouse/House populated (address data in extra fields) ---
+    # --- SubHouse/House populated (address data in extra council fields) ---
     rows.append(r(ElectorTitle="Ms", ElectorSurname="Fernandez", ElectorForename="Carmen",
         SubHouse="Flat 2", House="Regency Court",
         RegisteredAddress1="Regency Court", RegisteredAddress2="35 Chamberlayne Road",
@@ -818,7 +818,7 @@ def generate_realistic_messy_data():
             RegisteredAddress1=f"Flat {flat_n}", RegisteredAddress2="10 Kilburn Lane",
             RegisteredAddress3="London", PostCode="NW6 5HT"))
 
-    # --- ISSUE: Same flat block, but SubHouse/House used instead of Address1 ---
+    # --- SubHouse/House used instead of Address1 ---
     rows.append(r(PDCode="KG2", Ward="Kensal Green", Parl="Brent East",
         ElectorTitle="Ms", ElectorSurname="Rivera", ElectorForename="Sofia",
         SubHouse="Flat 9", House="Kilburn Court",

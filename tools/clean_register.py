@@ -171,11 +171,9 @@ def resolve_aliases(headers, quiet=False):
 COUNCIL_ONLY_COLUMNS = [
     "ElectorTitle", "IERStatus", "FranchiseMarker",
     "Euro", "Parl", "County", "Ward",
+    "SubHouse", "House",
     "MethodOfVerification", "ElectorID",
 ]
-
-# Columns with potential address data (logged with extra detail)
-SPECIAL_COLUMNS = ["SubHouse", "House"]
 
 # Enrichment columns recognized but not mapped (preserved unless --strip-extra)
 ENRICHMENT_DISCARD_COLUMNS = ["Full Name", "Full name"]
@@ -240,7 +238,6 @@ class QAReport:
         self.warnings = []        # [(row, field, value, issue)]
         self.fixes = []           # [(row, field, old_value, new_value, issue)]
         self.info = []            # [str]
-        self.special_columns = {} # {col: [(row, value)]}
         self.unrecognized_columns = []  # [col_name]
         self.alias_log = []  # [(original_name, canonical_name)]
         self.strip_extra = False
@@ -284,7 +281,7 @@ class QAReport:
             "Surname": "(+ name case normalization)",
             "Forename": "(+ name case normalization)",
             "Date of Attainment": "(+ date normalization to DD/MM/YYYY)",
-            "Address1": "(+ SubHouse incorporation, address reformatting)",
+            "Address1": "(+ address reformatting)",
             "Address2": "(+ address reformatting)",
             "PostCode": "(+ spacing/case normalization)",
         }
@@ -336,17 +333,6 @@ class QAReport:
             for row, field, value, issue in self.warnings:
                 display_val = f"'{value}'" if value else "(empty)"
                 lines.append(f"  Row {row}: {field} = {display_val} -- {issue}")
-            lines.append("")
-
-        if self.special_columns:
-            lines.append("--- Special Column Data ---")
-            for col, entries in self.special_columns.items():
-                lines.append(f"  {col}: {len(entries)} non-empty values (discarded).")
-                lines.append(f"  These may contain address info not in Address1-6. Review recommended.")
-                for row, val in entries[:10]:
-                    lines.append(f"    Row {row}: '{val}'")
-                if len(entries) > 10:
-                    lines.append(f"    ... and {len(entries) - 10} more")
             lines.append("")
 
         if self.unrecognized_columns:
@@ -615,49 +601,6 @@ def normalize_date(value, date_format_hint="DMY"):
 
 
 # ---------------------------------------------------------------------------
-# SubHouse incorporation
-# ---------------------------------------------------------------------------
-
-def incorporate_subhouse(ttw_row, council_row, row_num, report):
-    """Incorporate SubHouse data into Address1 when it adds flat/unit info.
-
-    Council data sometimes puts flat designations in a separate SubHouse column
-    rather than in Address1. Per UG C3 slide 10, the flat designation must be
-    in Address1 (e.g. "Regency Court Flat 2") for TTW to parse it correctly.
-    """
-    subhouse = (council_row.get("SubHouse") or "").strip()
-    if not subhouse:
-        return
-
-    addr1 = ttw_row.get("Address1", "")
-
-    # Skip if SubHouse value is already present in Address1
-    if subhouse.lower() in addr1.lower():
-        return
-
-    # SubHouse often has "Flat X, HouseNum" format. Extract the flat part.
-    if "," in subhouse:
-        flat_part = subhouse.split(",", 1)[0].strip()
-    else:
-        flat_part = subhouse
-
-    # Skip if the flat designation from SubHouse is already in Address1.
-    # Use word-boundary check to avoid "Flat 1" matching "Flat 12".
-    if addr1 and flat_part:
-        pattern = re.escape(flat_part) + r"(?:\s|,|$)"
-        if re.search(pattern, addr1, re.IGNORECASE):
-            return
-
-    old_addr1 = addr1
-    if addr1:
-        new_addr1 = f"{addr1} {subhouse}"
-    else:
-        new_addr1 = subhouse
-    ttw_row["Address1"] = new_addr1
-    report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
-        "SubHouse data incorporated into Address1"))
-
-
 # ---------------------------------------------------------------------------
 # Name normalization
 # ---------------------------------------------------------------------------
@@ -752,7 +695,7 @@ def _looks_like_road(text):
 def reformat_addresses(row, row_num, report):
     """Auto-fix detectable address formatting issues, flag ambiguous patterns.
 
-    Fix order: 1 (gap) -> 1b (dual-number bracket) -> 2 (flat comma) -> 2b (comma-free flat+road) -> 3 (number before flat) -> 4 (number before building)
+    Fix order: 1 (gap) -> 1b (dual-number bracket) -> 1c (ampersand) -> 2 (flat comma) -> 2b (comma-free flat+road) -> 3 (number before flat) -> 4 (number before building) -> 4b (ambiguous building+road suffix) -> 4c (single-word building)
     Each fix refreshes local vars after modifying row.
     """
     # --- Fix 1: Address gap (Address2 empty, Address3+ has data) ---
@@ -937,6 +880,32 @@ def reformat_addresses(row, row_num, report):
                 report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
                     "number before building name reordered (Address2 confirms road)"))
 
+    # Refresh locals after fix 4b
+    addr1 = row.get("Address1", "")
+    addr2 = row.get("Address2", "")
+
+    # --- Fix 4c: Single-word building name with Address2 road confirmation ---
+    # Handles cases like "26 Dorada" where Address2 = "30 Chamberlayne Road"
+    # confirms the single word is a building name, not a road.
+    # Requires len >= 2 to exclude single-letter house-number suffixes (e.g. "14 B").
+    # Hyphenated single-word names (e.g. "St-Johns") are excluded by the alpha
+    # check — this is a conscious limitation; they are rare and ambiguous enough
+    # to warrant manual review rather than auto-reordering.
+    if addr2 and _looks_like_road(addr2):
+        num_before_single = re.match(r"^(\d+[A-Za-z]?)\s+(.+)$", addr1)
+        if num_before_single:
+            number = num_before_single.group(1)
+            remainder = num_before_single.group(2)
+            remainder_words = remainder.split()
+            if (len(remainder_words) == 1
+                    and len(remainder) >= 2
+                    and remainder.isalpha()):
+                old_addr1 = addr1
+                new_addr1 = f"{remainder} {number}"
+                row["Address1"] = new_addr1
+                report.fixes.append((row_num, "Address1", old_addr1, new_addr1,
+                    "single-word building name reordered (Address2 confirms road)"))
+
     # Refresh for flagging
     addr1 = row.get("Address1", "")
 
@@ -995,6 +964,45 @@ def zero_pad_flat_numbers(rows, report):
                 rows[idx]["Address1"] = new_addr1
                 report.fixes.append((idx + 2, "Address1", old_addr1, new_addr1,
                     "flat number zero-padded for sort order"))
+
+
+def zero_pad_building_numbers(rows, report):
+    """Zero-pad building numbers for consistent sort order within each building.
+
+    Groups rows by (building_name, PostCode). Within each group, pads numeric
+    building IDs to the maximum width found (e.g. Sheil Court 3 -> Sheil Court 03
+    if max is 14).
+
+    Only applies to trailing numbers in Address1 (e.g. "Sheil Court 10").
+    Flat/Unit/Apt/Room/Studio patterns are skipped (handled by zero_pad_flat_numbers).
+    """
+    building_num_re = re.compile(r"^(.+\S)\s+(\d+)([A-Za-z]?)$")
+
+    groups = defaultdict(list)  # (building_name, postcode) -> [(index, match)]
+    for i, row in enumerate(rows):
+        addr1 = row.get("Address1", "")
+        postcode = row.get("PostCode", "")
+        # Skip flat/unit patterns (already handled by zero_pad_flat_numbers)
+        if UNIT_PREFIXES_RE.match(addr1):
+            continue
+        m = building_num_re.match(addr1)
+        if m and any(c.isalpha() for c in m.group(1)):
+            building_name = m.group(1)
+            groups[(building_name, postcode)].append((i, m))
+
+    for key, members in groups.items():
+        max_width = max(len(m.group(2)) for _, m in members)
+        if max_width <= 1:
+            continue
+        for idx, m in members:
+            num_str = m.group(2)
+            if len(num_str) < max_width:
+                old_addr1 = rows[idx]["Address1"]
+                padded = num_str.zfill(max_width)
+                new_addr1 = f"{m.group(1)} {padded}{m.group(3)}"
+                rows[idx]["Address1"] = new_addr1
+                report.fixes.append((idx + 2, "Address1", old_addr1, new_addr1,
+                    "building number zero-padded for sort order"))
 
 
 # ---------------------------------------------------------------------------
@@ -1297,7 +1305,7 @@ def main():
 
     # --- Check for unrecognized input columns ---
     known_columns = (set(FIELD_MAP.keys()) | set(COUNCIL_ONLY_COLUMNS)
-                     | set(SPECIAL_COLUMNS) | {"Suffix"})
+                     | {"Suffix"})
     if args.enriched_columns:
         known_columns |= set(ENRICHMENT_EXTRA_COLUMNS)
         known_columns |= set(ENRICHMENT_DISCARD_COLUMNS)
@@ -1330,13 +1338,6 @@ def main():
         report.discarded_columns = [c for c in COUNCIL_ONLY_COLUMNS if c in header_set]
         if args.enriched_columns:
             report.discarded_columns += [c for c in ENRICHMENT_DISCARD_COLUMNS if c in header_set]
-    for col in SPECIAL_COLUMNS:
-        if col in header_set:
-            non_empty = [(i + 2, r.get(col) or "") for i, r in enumerate(council_rows)
-                         if (r.get(col) or "").strip()]
-            if non_empty:
-                report.special_columns[col] = non_empty
-
     # --- Step 5-6: Strip whitespace and map columns ---
     mapped_rows = []
     for council_row in council_rows:
@@ -1358,10 +1359,6 @@ def main():
             ttw_row[col] = val
         mapped_rows.append(ttw_row)
 
-    # --- Step 6.4: Incorporate SubHouse data ---
-    for i, (row, council_row) in enumerate(zip(mapped_rows, council_rows)):
-        incorporate_subhouse(row, council_row, i + 2, report)
-
     # --- Step 6.5: Normalize names ---
     for i, row in enumerate(mapped_rows):
         normalize_names(row, i + 2, report)
@@ -1372,6 +1369,9 @@ def main():
 
     # --- Step 6.7: Zero-pad flat numbers ---
     zero_pad_flat_numbers(mapped_rows, report)
+
+    # --- Step 6.8: Zero-pad building numbers ---
+    zero_pad_building_numbers(mapped_rows, report)
 
     # --- Step 7: Compute suffix ---
     compute_suffixes(mapped_rows, council_rows, report=report)

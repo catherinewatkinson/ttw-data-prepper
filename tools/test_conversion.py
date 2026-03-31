@@ -268,8 +268,8 @@ class TestDeletion(unittest.TestCase):
         self.assertIn("PartialAddr", surnames)
 
     def test_output_row_count(self):
-        """73 input rows - 1 deletion = 72 output rows."""
-        self.assertEqual(len(self.rows), 72)
+        """84 input rows - 1 deletion = 83 output rows."""
+        self.assertEqual(len(self.rows), 83)
 
     def test_deletion_reason_in_report(self):
         """Deleted record should appear in human-readable section too."""
@@ -348,17 +348,11 @@ class TestFieldMapping(unittest.TestCase):
         self.assertTrue(len(obrien) >= 1, "O'Brien-Smythe should be in output")
         self.assertEqual(obrien[0]["Surname"], "O'Brien-Smythe")
 
-    def test_subhouse_house_in_report(self):
-        """SubHouse/House discard should be noted in report."""
-        self.assertIn("SubHouse", self.report_text)
-        self.assertIn("Flat 3", self.report_text)
-
-    def test_subhouse_incorporated_into_address1(self):
-        """SubHouse data should be incorporated into Address1."""
-        # Edge case row 11: SubHouse="Flat 3", Address1="Oak Manor" -> "Oak Manor Flat 3"
+    def test_subhouse_not_incorporated_into_address1(self):
+        """SubHouse data should NOT be incorporated into Address1 (pass-through only)."""
         kate = [r for r in self.rows if r["Surname"] == "WithSubHouse"]
         self.assertEqual(len(kate), 1)
-        self.assertEqual(kate[0]["Address1"], "Oak Manor Flat 3")
+        self.assertEqual(kate[0]["Address1"], "Oak Manor")
 
     def test_no_discarded_columns_by_default(self):
         """Without --strip-extra, no columns should be listed as discarded."""
@@ -1378,6 +1372,83 @@ class TestAddressReformatting(unittest.TestCase):
         row = self._get_row("79")
         self.assertEqual(row["Address1"], "73 Park Avenue North")
 
+    # --- Building number zero-padding ---
+
+    def test_building_number_padded(self):
+        """Row 80: '3 Maple House' -> 'Maple House 03' (Fix 4 reorder + padding)."""
+        row = self._get_row("80")
+        self.assertEqual(row["Address1"], "Maple House 03")
+
+    def test_building_number_max_width_unchanged(self):
+        """Row 81: '14 Maple House' -> 'Maple House 14' (already max width)."""
+        row = self._get_row("81")
+        self.assertEqual(row["Address1"], "Maple House 14")
+
+    def test_building_number_alphanumeric_padded(self):
+        """Row 82: '1A Maple House' -> 'Maple House 01A' (padded with letter suffix)."""
+        row = self._get_row("82")
+        self.assertEqual(row["Address1"], "Maple House 01A")
+
+    def test_building_number_leading_not_padded(self):
+        """Row 83: '24 Sheil Court' no Addr2 -> unchanged (not reordered)."""
+        row = self._get_row("83")
+        self.assertEqual(row["Address1"], "24 Sheil Court")
+
+    def test_building_number_single_not_padded(self):
+        """Row 84: Only one Oak Lodge entry -> not padded (max width=1)."""
+        row = self._get_row("84")
+        self.assertEqual(row["Address1"], "Oak Lodge 5")
+
+    def test_building_padding_fix_logged(self):
+        """FIX entries should exist for zero-padded building numbers."""
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        bldg_pad_fixes = [f for _, f in fixes if "building number zero-padded" in f.get("Issue", "")]
+        self.assertTrue(len(bldg_pad_fixes) >= 1)
+
+    # --- Fix 4c: Single-word building name with Address2 road ---
+
+    def test_single_word_building_reordered(self):
+        """Row 85: '26 Dorada' with Addr2='30 Chamberlayne Road' -> 'Dorada 26'."""
+        row = self._get_row("85")
+        self.assertEqual(row["Address1"], "Dorada 26")
+        self.assertEqual(row["Address2"], "30 Chamberlayne Road")
+
+    def test_single_word_building_zero_padded(self):
+        """Row 86: '3 Dorada' with same road/postcode -> 'Dorada 03' (padded to match row 85)."""
+        row = self._get_row("86")
+        self.assertEqual(row["Address1"], "Dorada 03")
+
+    def test_single_word_road_suffix_reordered(self):
+        """Row 87: '26 Broadway' with Addr2='30 Chamberlayne Road' -> 'Broadway 26'."""
+        row = self._get_row("87")
+        self.assertEqual(row["Address1"], "Broadway 26")
+
+    def test_single_word_no_addr2_not_reordered(self):
+        """Row 88: '26 Dorada' with empty Addr2 -> unchanged (ambiguous)."""
+        row = self._get_row("88")
+        self.assertEqual(row["Address1"], "26 Dorada")
+
+    def test_single_word_non_road_addr2_not_reordered(self):
+        """Row 89: '26 Dorada' with Addr2='London' -> unchanged (Addr2 not a road)."""
+        row = self._get_row("89")
+        self.assertEqual(row["Address1"], "26 Dorada")
+
+    def test_single_char_still_not_reordered(self):
+        """Row 42: '14 B' with Addr2='Coleman Road' -> unchanged (single char guard)."""
+        row = self._get_row("42")
+        self.assertEqual(row["Address1"], "14 B")
+
+    def test_single_word_alphanumeric_reordered(self):
+        """Row 90: '26A Dorada' with Addr2='30 Chamberlayne Road' -> 'Dorada 26A'."""
+        row = self._get_row("90")
+        self.assertEqual(row["Address1"], "Dorada 26A")
+
+    def test_single_word_building_fix_logged(self):
+        """FIX entries should exist for single-word building name reordering."""
+        fixes = [parse_machine_line(l) for l in self.machine if l.startswith("FIX")]
+        single_fixes = [f for _, f in fixes if "single-word building name reordered" in f.get("Issue", "")]
+        self.assertTrue(len(single_fixes) >= 1)
+
 
 # ---------------------------------------------------------------------------
 # Realistic Messy Data Tests
@@ -1597,26 +1668,23 @@ class TestRealisticMessyData(unittest.TestCase):
 
     # --- SubHouse/House ---
 
-    def test_subhouse_house_reported(self):
-        """SubHouse/House data should be reported and preserved in output."""
+    def test_subhouse_house_preserved_in_output(self):
+        """SubHouse/House columns should pass through to output as council columns."""
         self.assertIn("SubHouse", self.headers)
         self.assertIn("House", self.headers)
-        self.assertIn("SubHouse", self.report_text)
-        self.assertIn("Regency Court", self.report_text)
-        self.assertIn("Kilburn Court", self.report_text)
 
-    def test_subhouse_incorporated_fernandez(self):
-        """Fernandez SubHouse flat numbers should be incorporated into Address1."""
+    def test_subhouse_not_incorporated_fernandez(self):
+        """Fernandez Address1 should NOT have SubHouse data incorporated."""
         fernandez = [r for r in self.rows if r["Surname"] == "Fernandez"]
         self.assertEqual(len(fernandez), 2)
         addr1s = sorted(r["Address1"] for r in fernandez)
-        self.assertEqual(addr1s, ["Regency Court Flat 2", "Regency Court Flat 3"])
+        self.assertEqual(addr1s, ["Regency Court", "Regency Court"])
 
-    def test_subhouse_incorporated_rivera(self):
-        """Rivera SubHouse flat number should be incorporated into Address1."""
+    def test_subhouse_not_incorporated_rivera(self):
+        """Rivera Address1 should NOT have SubHouse data incorporated."""
         rivera = [r for r in self.rows if r["Surname"] == "Rivera"]
         self.assertEqual(len(rivera), 1)
-        self.assertEqual(rivera[0]["Address1"], "Kilburn Court Flat 9")
+        self.assertEqual(rivera[0]["Address1"], "Kilburn Court")
 
     # --- Multi-elector addresses ---
 

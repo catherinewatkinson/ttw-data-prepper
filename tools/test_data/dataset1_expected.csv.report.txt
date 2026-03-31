@@ -31,7 +31,7 @@ Input columns: PDCode, RollNo, FranchiseMarker, DateOfAttainment, GE24, New, P/P
   Forename                         <- ElectorForename (+ name case normalization)
   Middle Names                     <- ElectorMiddleName
   Date of Attainment               <- DateOfAttainment (+ date normalization to DD/MM/YYYY)
-  Address1                         <- RegisteredAddress1 (+ SubHouse incorporation, address reformatting)
+  Address1                         <- RegisteredAddress1 (+ address reformatting)
   Address2                         <- RegisteredAddress2 (+ address reformatting)
   Address3                         <- RegisteredAddress3
   Address4                         <- RegisteredAddress4

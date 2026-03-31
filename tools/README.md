@@ -15,7 +15,13 @@ Tools for converting council electoral register data into the CSV format require
 | `test_conversion.py` | Test suite for `clean_register.py` |
 | `test_enrichment.py` | Test suite for `enrich_register.py` |
 | `test_validation.py` | Test suite for `validate_enrichment.py` |
+| `check_membership_registration.py` | Cross-check membership list against register to find unregistered members |
+| `validate_membership_check.py` | Verify membership cross-check output is correct and uncorrupted |
+| `update_app_export.py` | Update TTW app-export CSV with council register data (GVI, party, tags, notes) |
 | `generate_dummy_data.py` | Generate sample test datasets |
+| `test_update_app_export.py` | Test suite for `update_app_export.py` |
+| `test_membership_check.py` | Test suite for `check_membership_registration.py` |
+| `test_validate_membership.py` | Test suite for `validate_membership_check.py` |
 
 ---
 
@@ -170,7 +176,7 @@ The converter applies the following transformations automatically:
 ### Column mapping
 - Maps council column names (PDCode, RollNo, ElectorForename, etc.) to TTW column names (Elector No. Prefix, Elector No., Forename, etc.)
 - Discards council-only columns (ElectorTitle, IERStatus, FranchiseMarker, Ward, Parl, Euro, etc.)
-- Incorporates SubHouse/House data into Address1 where relevant
+- Preserves SubHouse/House columns as pass-through council data
 
 ### Name normalisation
 - ALL CAPS and all lowercase names are title-cased (e.g. `SMITH` → `Smith`)

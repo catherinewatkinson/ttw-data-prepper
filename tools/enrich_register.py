@@ -572,7 +572,7 @@ def _merge_er_rows(primary, secondary, display_name, postcode, report):
     """Fill gaps in primary from secondary. Log clashes.
 
     Only merges enrichment data columns — core identity/address fields
-    (RollNo, Address1-6, SubHouse, ElectorID, UPRN, etc.) are skipped.
+    (RollNo, Address1-6, ElectorID, UPRN, etc.) are skipped.
     """
     for key in secondary:
         if key in _ER_CORE_FIELDS:
