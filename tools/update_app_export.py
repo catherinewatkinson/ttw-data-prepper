@@ -67,14 +67,14 @@ REQUIRED_APP_TARGETS = [
     APP_SURNAME, APP_FORENAME, APP_POSTCODE,
     "Date of Attainment",
     "Poster ticked", "Board ticked", "Do Not Knock ticked",
-    "Text of Note 1 (most recent)", "Date of Note 1 (most recent)",
+    "Text of Note 1", "Date of Note 1 (most recent)",
     LE2026_GVI, LE2026_PARTY, LE2026_POSTAL, LE2026_DATE,
     GE2024_VOTED,
 ]
 
 # Note column name patterns
 NOTE_TEXT_KEYS = [
-    "Text of Note 1 (most recent)",
+    "Text of Note 1",
     "Text of Note 2", "Text of Note 3", "Text of Note 4", "Text of Note 5",
     "Text of Note 6", "Text of Note 7", "Text of Note 8", "Text of Note 9",
     "Text of Note 10",
@@ -85,6 +85,45 @@ NOTE_DATE_KEYS = [
     "Date of Note 6", "Date of Note 7", "Date of Note 8", "Date of Note 9",
     "Date of Note 10",
 ]
+
+# LE2026 election data slots for shifting (Date + GVI + Party grouped per visit)
+# Postal Voter only exists on Most Recent — handled separately as simple overwrite
+LE2026_VISIT_SLOTS = [
+    {  # Most Recent Data
+        "date": f"{LE2026_PREFIX} Most Recent Data - Date",
+        "gvi": f"{LE2026_PREFIX} Most Recent Data - GVI",
+        "party": f"{LE2026_PREFIX} Most Recent Data - Usual Party",
+    },
+    {  # Previous Data 1
+        "date": f"{LE2026_PREFIX} Previous Data 1 - Date",
+        "gvi": f"{LE2026_PREFIX} Previous Data 1 - GVI",
+        "party": f"{LE2026_PREFIX} Previous Data 1 - Usual Party",
+    },
+    {  # Previous Data 2
+        "date": f"{LE2026_PREFIX} Previous Data 2 - Date",
+        "gvi": f"{LE2026_PREFIX} Previous Data 2 - GVI",
+        "party": f"{LE2026_PREFIX} Previous Data 2 - Usual Party",
+    },
+    {  # Previous Data 3
+        "date": f"{LE2026_PREFIX} Previous Data 3 - Date",
+        "gvi": f"{LE2026_PREFIX} Previous Data 3 - GVI",
+        "party": f"{LE2026_PREFIX} Previous Data 3 - Usual Party",
+    },
+    {  # Previous Data 4
+        "date": f"{LE2026_PREFIX} Previous Data 4 - Date",
+        "gvi": f"{LE2026_PREFIX} Previous Data 4 - GVI",
+        "party": f"{LE2026_PREFIX} Previous Data 4 - Usual Party",
+    },
+]
+
+# TTW sentinel values (treated as empty/no data)
+TTW_EMPTY_VALUES = frozenset({"<NO RECORD>", "<NO DATA RECORDED>", ""})
+
+
+def _is_ttw_empty(value):
+    """Return True if a TTW field value represents no data."""
+    return (value or "").strip() in TTW_EMPTY_VALUES
+
 
 # Reverse party mapping: TTW code -> app-export full name
 REVERSE_PARTY_MAP = {
@@ -179,6 +218,25 @@ def reverse_map_party(value):
     return "", f"Unrecognized party code '{code}' after mapping from '{raw}'"
 
 
+def shift_le2026_visits(row, report, row_key):
+    """Shift LE2026 visit data (Date+GVI+Party) down one slot.
+    Most Recent -> Previous 1 -> ... -> Previous 4. Previous 4 lost if full."""
+    slot4 = LE2026_VISIT_SLOTS[4]
+    if any(not _is_ttw_empty(row.get(slot4[k], "")) for k in ("date", "gvi", "party")):
+        report.warnings.append(
+            f"{row_key}: LE2026 Previous Data 4 content lost during shift")
+
+    for i in range(4, 0, -1):
+        dest = LE2026_VISIT_SLOTS[i]
+        src = LE2026_VISIT_SLOTS[i - 1]
+        for field in ("date", "gvi", "party"):
+            row[dest[field]] = row.get(src[field], "")
+
+    # Clear Most Recent visit fields (caller will write new values)
+    for field in ("date", "gvi", "party"):
+        row[LE2026_VISIT_SLOTS[0][field]] = ""
+
+
 def shift_notes(row, report, row_key):
     """Shift notes 1->2, 2->3, ..., 9->10. Note 10 is lost if full."""
     # Check if Note 10 has content (will be lost)
@@ -220,6 +278,16 @@ class UpdateReport:
         # Per-field update counts
         self.field_updates = defaultdict(int)
         self.warnings = []
+
+        # Rejected register rows — split into two categories:
+        # rejects2check: ambiguous, duplicate, possible (need manual review)
+        # unmatched: no match found at all (moved away / not registered)
+        self.rejects2check = []      # [(reg_row_dict, reason)]
+        self.unmatched_rows = []     # [(reg_row_dict, reason)]
+
+        # App row indices to force-include in --changed-only output
+        # (e.g. both app rows for a duplicate-name pair, so user can review)
+        self.force_include_indices = set()
 
     def write(self, path):
         """Write human-readable report with machine-readable footer."""
@@ -317,11 +385,15 @@ def validate_register(headers):
 # Matching
 # ---------------------------------------------------------------------------
 
+ROW_KEY = "Voter Number"
+
+
 def match_register_to_app(register_rows, app_rows, threshold, report):
     """Match register rows to app-export by fuzzy name+postcode.
     Returns dict: app_idx -> register_row."""
 
     # Build postcode index from app-export
+    # Each entry: (idx, surname, forename, addr_str, voter_number, doa)
     pc_index = defaultdict(list)
     for i, row in enumerate(app_rows):
         pc_raw = row.get(APP_POSTCODE, "").strip()
@@ -329,14 +401,18 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
         surname = row.get(APP_SURNAME, "").strip()
         forename = row.get(APP_FORENAME, "").strip()
         addr_str = _get_app_address(row)
+        voter_num = row.get(ROW_KEY, "").strip()
+        doa = row.get("Date of Attainment", "").strip()
         if pc:
-            pc_index[pc].append((i, surname, forename, addr_str))
+            pc_index[pc].append((i, surname, forename, addr_str, voter_num, doa))
 
     # All app rows for no-postcode fallback
     all_app = [
         (i, row.get(APP_SURNAME, "").strip(),
          row.get(APP_FORENAME, "").strip(),
-         _get_app_address(row))
+         _get_app_address(row),
+         row.get(ROW_KEY, "").strip(),
+         row.get("Date of Attainment", "").strip())
         for i, row in enumerate(app_rows)
     ]
 
@@ -366,55 +442,109 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
         if not candidates:
             report.unmatched += 1
             report.unmatched_details.append((reg_name, reg_pc))
+            report.unmatched_rows.append((reg_row, "No candidates at postcode"))
             continue
+
+        # Build register voter number for tiebreaking
+        reg_pdcode = reg_row.get("PDCode", "").strip()
+        reg_rollno = reg_row.get("RollNo", "").strip()
+        reg_voter_num = f"{reg_pdcode}-{reg_rollno}" if reg_pdcode and reg_rollno else ""
+
+        # Normalize register DoA for tiebreaking
+        reg_doa_raw = reg_row.get("DateOfAttainment", "").strip()
+        reg_doa_normalized = ""
+        if reg_doa_raw:
+            norm, _ = normalize_date(reg_doa_raw)
+            if norm:
+                reg_doa_normalized = to_app_date(norm)
 
         # Score candidates
         scored = []
-        for app_idx, app_surname, app_forename, app_addr in candidates:
+        for app_idx, app_surname, app_forename, app_addr, app_voter_num, app_doa in candidates:
             score = _surname_forename_similarity(
                 reg_surname, reg_forename, app_surname, app_forename)
-            scored.append((score, app_idx, app_surname, app_forename, app_addr))
+            scored.append((score, app_idx, app_surname, app_forename, app_addr,
+                           app_voter_num, app_doa))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        best_score, best_idx, best_surname, best_forename, best_addr = scored[0]
+        best_score, best_idx, best_surname, best_forename, best_addr, _, _ = scored[0]
         best_name = f"{best_forename} {best_surname}".strip()
 
-        # Ambiguity check with address tiebreaker
-        if len(scored) > 1 and best_score < 1.0:
+        # Ambiguity check: multiple candidates with similar/identical scores
+        if len(scored) > 1 and best_score >= effective_threshold:
             second_score = scored[1][0]
-            if (best_score >= effective_threshold
-                    and (best_score - second_score) < AMBIGUITY_MARGIN):
-                # Try address tiebreaker
-                reg_addr = _get_register_address(reg_row)
-                if reg_addr:
-                    addr_scores = [
-                        (s[0] + 0.001 * _address_similarity(reg_addr, s[4]), s)
-                        for s in scored[:2]
-                    ]
-                    addr_scores.sort(key=lambda x: x[0], reverse=True)
-                    if addr_scores[0][0] - addr_scores[1][0] >= AMBIGUITY_MARGIN:
-                        best = addr_scores[0][1]
-                        best_score, best_idx, best_surname, best_forename, best_addr = best
-                        best_name = f"{best_forename} {best_surname}".strip()
-                    else:
-                        cands = [(f"{s[3]} {s[2]}".strip(), s[0]) for s in scored[:2]]
-                        report.ambiguous += 1
-                        report.ambiguous_details.append((reg_name, reg_pc, cands))
-                        continue
+            is_ambiguous = (best_score - second_score) < AMBIGUITY_MARGIN
+
+            if is_ambiguous:
+                # Try tiebreakers: Voter Number, then DoA, then address
+                resolved_idx = None
+
+                # Voter Number tiebreaker
+                if reg_voter_num:
+                    for s in scored:
+                        if s[0] >= effective_threshold and s[5] == reg_voter_num:
+                            resolved_idx = s
+                            break
+
+                # DoA tiebreaker
+                if resolved_idx is None and reg_doa_normalized:
+                    for s in scored:
+                        if s[0] >= effective_threshold and s[6] and s[6] == reg_doa_normalized:
+                            resolved_idx = s
+                            break
+
+                # Address tiebreaker
+                if resolved_idx is None:
+                    reg_addr = _get_register_address(reg_row)
+                    if reg_addr:
+                        addr_scores = [
+                            (s[0] + 0.001 * _address_similarity(reg_addr, s[4]), s)
+                            for s in scored[:2]
+                        ]
+                        addr_scores.sort(key=lambda x: x[0], reverse=True)
+                        if addr_scores[0][0] - addr_scores[1][0] >= AMBIGUITY_MARGIN:
+                            resolved_idx = addr_scores[0][1]
+
+                if resolved_idx is not None:
+                    best_score, best_idx = resolved_idx[0], resolved_idx[1]
+                    best_surname, best_forename = resolved_idx[2], resolved_idx[3]
+                    best_name = f"{best_forename} {best_surname}".strip()
                 else:
-                    cands = [(f"{s[3]} {s[2]}".strip(), s[0]) for s in scored[:2]]
+                    # Still ambiguous — add all candidates to rejects2check
+                    above = [s for s in scored if s[0] >= effective_threshold]
+                    cands_info = []
+                    for s in above:
+                        app_r = app_rows[s[1]]
+                        uuid = app_r.get("Voter UUID", "").strip()
+                        vn = app_r.get(ROW_KEY, "").strip()
+                        cands_info.append(f"{s[3]} {s[2]} (Voter={vn}, UUID={uuid}, score={s[0]:.2f})")
+                        report.force_include_indices.add(s[1])
+                    cands = [(f"{s[3]} {s[2]}".strip(), s[0]) for s in above]
                     report.ambiguous += 1
                     report.ambiguous_details.append((reg_name, reg_pc, cands))
+                    report.warnings.append(
+                        f"Ambiguous: register '{reg_name}' ({reg_voter_num}) "
+                        f"matches multiple app rows: {'; '.join(cands_info)}")
+                    report.rejects2check.append((
+                        reg_row, f"Ambiguous: matches {'; '.join(cands_info)}"))
                     continue
 
         if best_score >= effective_threshold:
-            # Check for duplicate claims
             if best_idx in app_claimed:
-                report.duplicate_matches += 1
-                prev_reg_idx, prev_name = app_claimed[best_idx]
-                report.warnings.append(
-                    f"Register row '{reg_name}' also matches app row '{best_name}' "
-                    f"(already claimed by '{prev_name}') — skipped")
+                # Tiebreaker resolved to an already-claimed row — treat as ambiguous
+                above = [s for s in scored if s[0] >= effective_threshold]
+                cands_info = []
+                for s in above:
+                    app_r = app_rows[s[1]]
+                    uuid = app_r.get("Voter UUID", "").strip()
+                    vn = app_r.get(ROW_KEY, "").strip()
+                    cands_info.append(f"{s[3]} {s[2]} (Voter={vn}, UUID={uuid}, score={s[0]:.2f})")
+                    report.force_include_indices.add(s[1])
+                report.ambiguous += 1
+                report.ambiguous_details.append((reg_name, reg_pc,
+                    [(f"{s[3]} {s[2]}".strip(), s[0]) for s in above]))
+                report.rejects2check.append((
+                    reg_row, f"Ambiguous (tiebreaker target claimed): {'; '.join(cands_info)}"))
                 continue
             app_claimed[best_idx] = (reg_idx, reg_name)
             matched[best_idx] = reg_row
@@ -425,9 +555,14 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
             report.possible += 1
             report.possible_details.append(
                 (reg_name, reg_pc, best_score, best_name))
+            report.force_include_indices.add(best_idx)
+            report.rejects2check.append((
+                reg_row, f"Possible match only (score={best_score:.2f}, best='{best_name}')"))
         else:
             report.unmatched += 1
             report.unmatched_details.append((reg_name, reg_pc))
+            report.unmatched_rows.append((
+                reg_row, f"No match (best score={best_score:.2f}, best='{best_name}')" if best_name else "No match"))
 
     return matched
 
@@ -437,12 +572,29 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
 # ---------------------------------------------------------------------------
 
 def apply_updates(app_rows, matched, report, data_date):
-    """Apply field updates from matched register rows to app-export rows."""
+    """Apply field updates from matched register rows to app-export rows.
+    Returns set of app_idx values that should appear in --changed-only output."""
+
+    changed_indices = set()
+    # Include indices for rejects2check app rows so user can manually review/edit
+    force_include_indices = report.force_include_indices
 
     for app_idx, reg_row in matched.items():
         app_row = app_rows[app_idx]
         app_name = f"{app_row.get(APP_FORENAME, '')} {app_row.get(APP_SURNAME, '')}".strip()
         le2026_updated = False
+        row_changed = False
+
+        def _set(field, value, label=None):
+            """Set field if value differs from existing. Returns True if changed."""
+            nonlocal row_changed
+            old = app_row.get(field, "")
+            if value and value != old:
+                app_row[field] = value
+                report.field_updates[label or field] += 1
+                row_changed = True
+                return True
+            return False
 
         # --- DateOfAttainment ---
         doa = reg_row.get("DateOfAttainment", "").strip()
@@ -451,45 +603,52 @@ def apply_updates(app_rows, matched, report, data_date):
             if normalized:
                 app_date = to_app_date(normalized)
                 if app_date:
-                    app_row["Date of Attainment"] = app_date
-                    report.field_updates["Date of Attainment"] += 1
+                    _set("Date of Attainment", app_date)
             elif warn:
                 report.warnings.append(f"{app_name}: DateOfAttainment: {warn}")
 
         # --- GE24 Voted ---
         ge24 = reg_row.get("GE24", "").strip()
         if ge24 and ge24.upper() in ("YES", "Y"):
-            app_row[GE2024_VOTED] = "Y"
-            report.field_updates["GE2024 Voted"] += 1
+            _set(GE2024_VOTED, "Y", "GE2024 Voted")
 
-        # --- PostalVoter -> LE2026 ---
-        pv = _get_postal_voter(reg_row)
-        if pv and pv.upper() not in ("N", "NO"):
-            app_row[LE2026_POSTAL] = "Y"
-            report.field_updates["LE2026 Postal Voter"] += 1
-            le2026_updated = True
-
-        # --- Party -> LE2026 Usual Party ---
+        # --- LE2026 visit fields (Date+GVI+Party shift together as a group) ---
         party_raw = reg_row.get("Party", "").strip()
+        party_value = ""
+        party_warn = None
         if party_raw:
-            app_name_party, warn = reverse_map_party(party_raw)
-            if app_name_party:
-                app_row[LE2026_PARTY] = app_name_party
-                report.field_updates["LE2026 Usual Party"] += 1
-                le2026_updated = True
-            elif warn:
-                report.warnings.append(f"{app_name}: Party: {warn}")
+            party_value, party_warn = reverse_map_party(party_raw)
 
-        # --- 1-5 (GVI) -> LE2026 GVI ---
         gvi = reg_row.get("1-5", "").strip()
+        gvi_value = ""
         if gvi:
             if gvi in ("1", "2", "3", "4", "5"):
-                app_row[LE2026_GVI] = gvi
-                report.field_updates["LE2026 GVI"] += 1
-                le2026_updated = True
+                gvi_value = gvi
             else:
                 report.warnings.append(
                     f"{app_name}: Invalid GVI '{gvi}' (must be 1-5), skipped")
+
+        # Shift visit data and write new values if we have any GVI or Party
+        if party_value or gvi_value:
+            shift_le2026_visits(app_row, report, app_name)
+            row_changed = True  # shift always changes rows
+            if gvi_value:
+                app_row[LE2026_GVI] = gvi_value
+                report.field_updates["LE2026 GVI"] += 1
+            if party_value:
+                app_row[LE2026_PARTY] = party_value
+                report.field_updates["LE2026 Usual Party"] += 1
+            app_row[LE2026_DATE] = data_date
+            report.field_updates["LE2026 Date"] += 1
+            le2026_updated = True
+
+        if party_warn and not party_value:
+            report.warnings.append(f"{app_name}: Party: {party_warn}")
+
+        # --- Postal Voter: simple overwrite (no Previous slots exist for it) ---
+        pv = _get_postal_voter(reg_row)
+        if pv and pv.upper() not in ("N", "NO"):
+            _set(LE2026_POSTAL, "Y", "LE2026 Postal Voter")
 
         # --- P/PB -> Poster/Board tags ---
         ppb = reg_row.get("P/PB", "").strip()
@@ -497,32 +656,29 @@ def apply_updates(app_rows, matched, report, data_date):
             parts = [p.strip() for p in ppb.split("/")]
             for part in parts:
                 if part.upper() == "P":
-                    app_row["Poster ticked"] = "TRUE"
-                    report.field_updates["Poster ticked"] += 1
+                    _set("Poster ticked", "TRUE")
                 elif part.upper() == "PB":
-                    app_row["Board ticked"] = "TRUE"
-                    report.field_updates["Board ticked"] += 1
+                    _set("Board ticked", "TRUE")
 
         # --- DNK -> Do Not Knock ---
         dnk = reg_row.get("DNK", "").strip()
         if dnk and dnk.upper() not in ("N", "NO", "FALSE"):
-            app_row["Do Not Knock ticked"] = "TRUE"
-            report.field_updates["Do Not Knock ticked"] += 1
+            _set("Do Not Knock ticked", "TRUE")
 
         # --- Comments -> Note 1 ---
         comment = reg_row.get("Comments", "").strip()
         if comment:
-            row_key = app_name
-            shift_notes(app_row, report, row_key)
+            shift_notes(app_row, report, app_name)
             app_row[NOTE_TEXT_KEYS[0]] = comment
             app_row[NOTE_DATE_KEYS[0]] = data_date
             report.field_updates["Notes"] += 1
+            row_changed = True
 
-        # --- LE2026 Date (record when data was entered) ---
-        # Only set if we actually wrote an LE2026 field
-        if le2026_updated:
-            app_row[LE2026_DATE] = data_date
-            report.field_updates["LE2026 Date"] += 1
+        if row_changed:
+            changed_indices.add(app_idx)
+
+    changed_indices.update(force_include_indices)
+    return changed_indices
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +698,9 @@ def main():
     parser.add_argument("--date", default=None,
                         help="Override today's date for notes/LE2026 date "
                              "(format: YYYY-MMM-DD, e.g. 2026-Mar-31)")
+    parser.add_argument("--changed-only", action="store_true",
+                        help="Output only rows that were actually modified "
+                             "(default: output all rows)")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress stdout output")
     args = parser.parse_args()
@@ -590,14 +749,44 @@ def main():
         register_rows, app_rows, args.match_threshold, report)
 
     # Apply updates
-    apply_updates(app_rows, matched, report, data_date)
+    changed_indices = apply_updates(app_rows, matched, report, data_date)
 
-    # Write output (preserve original column order)
+    # Write output
+    if args.changed_only:
+        output_rows = [app_rows[i] for i in sorted(changed_indices)]
+    else:
+        output_rows = app_rows
+
     with open(args.output, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=app_headers,
                                 lineterminator="\r\n", extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(app_rows)
+        writer.writerows(output_rows)
+
+    # Write rejects CSVs — two separate files:
+    # rejects2check: ambiguous/duplicate/possible (need manual review)
+    # unmatched: no match found (moved away / not registered)
+    out_stem = Path(args.output).stem
+    out_dir = Path(args.output).parent
+    rejects2check_path = str(out_dir / f"{out_stem}.rejects2check.csv")
+    unmatched_path = str(out_dir / f"{out_stem}.unmatched.csv")
+    reject_headers = list(register_headers) + ["Reject_Reason"]
+
+    def _write_reject_csv(path, rows):
+        if rows:
+            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=reject_headers,
+                                        lineterminator="\r\n", extrasaction="ignore")
+                writer.writeheader()
+                for reg_row, reason in rows:
+                    row_out = dict(reg_row)
+                    row_out["Reject_Reason"] = reason
+                    writer.writerow(row_out)
+        elif os.path.exists(path):
+            os.unlink(path)  # Clean up stale file from previous run
+
+    _write_reject_csv(rejects2check_path, report.rejects2check)
+    _write_reject_csv(unmatched_path, report.unmatched_rows)
 
     # Write report
     report.write(report_path)
@@ -613,6 +802,13 @@ def main():
         if report.ambiguous:
             print(f"  Ambiguous: {report.ambiguous}")
         print(f"  Unmatched register rows: {report.unmatched}")
+        print(f"  Rows changed: {len(changed_indices)}")
+        if args.changed_only:
+            print(f"  Output rows: {len(output_rows)} (changed only)")
+        if report.rejects2check:
+            print(f"  Rejects to review: {len(report.rejects2check)} (see {rejects2check_path})")
+        if report.unmatched_rows:
+            print(f"  Unmatched: {len(report.unmatched_rows)} (see {unmatched_path})")
         if report.field_updates:
             print(f"  Field updates:")
             for field, count in sorted(report.field_updates.items()):

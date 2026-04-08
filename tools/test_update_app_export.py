@@ -34,7 +34,7 @@ APP_EXPORT_HEADERS = [
     "Date of Attainment", "Date Entered onto Register", "Voter UUID",
     "House Name", "House Number", "Road", "Post Code", "Status",
     "Casework Phone Number", "Casework Email Address",
-    "Date of Note 1 (most recent)", "Text of Note 1 (most recent)",
+    "Date of Note 1 (most recent)", "Text of Note 1",
     "Date of Note 2", "Text of Note 2",
     "Date of Note 3", "Text of Note 3",
     "Date of Note 4", "Text of Note 4",
@@ -594,7 +594,7 @@ class TestNotesInsertion(unittest.TestCase):
     def setUpClass(cls):
         cls.app_rows = [make_app_row(**{
             "First Name": "Test", "Surname": "Notes", "Post Code": "NW10 3JU",
-            "Text of Note 1 (most recent)": "Old note 1",
+            "Text of Note 1": "Old note 1",
             "Date of Note 1 (most recent)": "2026-Jan-01",
             "Text of Note 2": "Old note 2",
             "Date of Note 2": "2025-Dec-15",
@@ -614,7 +614,7 @@ class TestNotesInsertion(unittest.TestCase):
             if os.path.exists(p): os.unlink(p)
 
     def test_note1_is_new_comment(self):
-        self.assertEqual(self.rows[0]["Text of Note 1 (most recent)"], "New comment")
+        self.assertEqual(self.rows[0]["Text of Note 1"], "New comment")
 
     def test_note1_date(self):
         self.assertEqual(self.rows[0]["Date of Note 1 (most recent)"], TEST_DATE)
@@ -634,7 +634,7 @@ class TestNotesEmpty(unittest.TestCase):
     def setUpClass(cls):
         cls.app_rows = [make_app_row(**{
             "First Name": "Test", "Surname": "NoComment", "Post Code": "NW10 3JU",
-            "Text of Note 1 (most recent)": "Existing note",
+            "Text of Note 1": "Existing note",
             "Date of Note 1 (most recent)": "2026-Jan-01",
         })]
         cls.reg_rows = [make_register_row(
@@ -652,7 +652,7 @@ class TestNotesEmpty(unittest.TestCase):
             if os.path.exists(p): os.unlink(p)
 
     def test_notes_untouched(self):
-        self.assertEqual(self.rows[0]["Text of Note 1 (most recent)"], "Existing note")
+        self.assertEqual(self.rows[0]["Text of Note 1"], "Existing note")
         self.assertEqual(self.rows[0]["Date of Note 1 (most recent)"], "2026-Jan-01")
 
 
@@ -661,7 +661,7 @@ class TestNotesOverflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         overrides = {"First Name": "Test", "Surname": "Full", "Post Code": "NW10 3JU"}
-        overrides["Text of Note 1 (most recent)"] = "Note 1"
+        overrides["Text of Note 1"] = "Note 1"
         overrides["Date of Note 1 (most recent)"] = "2026-Jan-01"
         for i in range(2, 11):
             overrides[f"Text of Note {i}"] = f"Note {i}"
@@ -684,7 +684,7 @@ class TestNotesOverflow(unittest.TestCase):
             if os.path.exists(p): os.unlink(p)
 
     def test_note1_is_new(self):
-        self.assertEqual(self.rows[0]["Text of Note 1 (most recent)"], "Overflow comment")
+        self.assertEqual(self.rows[0]["Text of Note 1"], "Overflow comment")
 
     def test_note10_is_old_note9(self):
         self.assertEqual(self.rows[0]["Text of Note 10"], "Note 9")
@@ -693,17 +693,23 @@ class TestNotesOverflow(unittest.TestCase):
         self.assertIn("Note 10", self.report_text)
 
 
-class TestOverwriteSemantics(unittest.TestCase):
+class TestLE2026VisitShift(unittest.TestCase):
+    """New GVI/Party shifts existing visit data down, preserves history."""
 
     @classmethod
     def setUpClass(cls):
         cls.app_rows = [make_app_row(**{
-            "First Name": "Test", "Surname": "Overwrite", "Post Code": "NW10 3JU",
+            "First Name": "Test", "Surname": "Shift", "Post Code": "NW10 3JU",
+            f"{LE2026} Most Recent Data - Date": "2026-Feb-15",
             f"{LE2026} Most Recent Data - GVI": "3",
             f"{LE2026} Most Recent Data - Usual Party": "Labour",
+            f"{LE2026} Most Recent Data - Postal Voter": "Y",
+            f"{LE2026} Previous Data 1 - Date": "2026-Jan-10",
+            f"{LE2026} Previous Data 1 - GVI": "2",
+            f"{LE2026} Previous Data 1 - Usual Party": "Conservatives",
         })]
         cls.reg_rows = [make_register_row(
-            ElectorSurname="Overwrite", ElectorForename="Test",
+            ElectorSurname="Shift", ElectorForename="Test",
             PostCode="NW10 3JU", Party="G", **{"1-5": "1"})]
         cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
         cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
@@ -716,11 +722,290 @@ class TestOverwriteSemantics(unittest.TestCase):
         for p in [cls.app_path, cls.reg_path, cls.out_path]:
             if os.path.exists(p): os.unlink(p)
 
-    def test_gvi_overwritten(self):
+    def test_most_recent_has_new_data(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - GVI"], "1")
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Date"], TEST_DATE)
+
+    def test_old_most_recent_shifted_to_previous1(self):
+        """Previous visit record preserved in Previous 1."""
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - Date"], "2026-Feb-15")
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - GVI"], "3")
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - Usual Party"], "Labour")
+
+    def test_old_previous1_shifted_to_previous2(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 2 - Date"], "2026-Jan-10")
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 2 - GVI"], "2")
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 2 - Usual Party"], "Conservatives")
+
+    def test_postal_voter_untouched(self):
+        """Postal Voter has no Previous slots — stays on Most Recent."""
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Postal Voter"], "Y")
+
+
+class TestLE2026PartialNewData(unittest.TestCase):
+    """Register has GVI but no Party — shift still happens, Party blank in new Most Recent."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [make_app_row(**{
+            "First Name": "Test", "Surname": "Partial", "Post Code": "NW10 3JU",
+            f"{LE2026} Most Recent Data - Date": "2026-Feb-15",
+            f"{LE2026} Most Recent Data - GVI": "3",
+            f"{LE2026} Most Recent Data - Usual Party": "Labour",
+        })]
+        cls.reg_rows = [make_register_row(
+            ElectorSurname="Partial", ElectorForename="Test",
+            PostCode="NW10 3JU", **{"1-5": "1"})]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        run_update(cls.app_path, cls.reg_path, cls.out_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_new_gvi(self):
         self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - GVI"], "1")
 
-    def test_party_overwritten(self):
+    def test_party_blank_in_most_recent(self):
+        """No party this visit — blank, not stale from previous visit."""
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Usual Party"], "")
+
+    def test_date_set_to_today(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Date"], TEST_DATE)
+
+    def test_old_data_preserved_in_previous1(self):
+        """Previous visit's full record preserved."""
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - GVI"], "3")
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - Usual Party"], "Labour")
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - Date"], "2026-Feb-15")
+
+
+class TestLE2026NoVisitData(unittest.TestCase):
+    """No GVI/Party in register → no shift, existing data preserved."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [make_app_row(**{
+            "First Name": "Test", "Surname": "NoVisit", "Post Code": "NW10 3JU",
+            f"{LE2026} Most Recent Data - GVI": "3",
+            f"{LE2026} Most Recent Data - Usual Party": "Labour",
+            f"{LE2026} Most Recent Data - Date": "2026-Feb-15",
+        })]
+        cls.reg_rows = [make_register_row(
+            ElectorSurname="NoVisit", ElectorForename="Test",
+            PostCode="NW10 3JU", GE24="Yes")]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        run_update(cls.app_path, cls.reg_path, cls.out_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_all_preserved(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - GVI"], "3")
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Usual Party"], "Labour")
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Date"], "2026-Feb-15")
+
+    def test_previous1_still_empty(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - GVI"], "")
+
+
+class TestLE2026Overflow(unittest.TestCase):
+    """All 5 slots full → Previous 4 lost with warning."""
+
+    @classmethod
+    def setUpClass(cls):
+        overrides = {"First Name": "Test", "Surname": "Full", "Post Code": "NW10 3JU"}
+        overrides[f"{LE2026} Most Recent Data - Date"] = "2026-Mar-01"
+        overrides[f"{LE2026} Most Recent Data - GVI"] = "1"
+        overrides[f"{LE2026} Most Recent Data - Usual Party"] = "Greens"
+        for i in range(1, 5):
+            overrides[f"{LE2026} Previous Data {i} - Date"] = f"2026-Jan-{i:02d}"
+            overrides[f"{LE2026} Previous Data {i} - GVI"] = str(i + 1)
+            overrides[f"{LE2026} Previous Data {i} - Usual Party"] = "Labour"
+        cls.app_rows = [make_app_row(**overrides)]
+        cls.reg_rows = [make_register_row(
+            ElectorSurname="Full", ElectorForename="Test",
+            PostCode="NW10 3JU", Party="LD", **{"1-5": "4"})]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.report_path = cls.out_path + ".report.txt"
+        run_update(cls.app_path, cls.reg_path, cls.out_path, report_file=cls.report_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+        cls.report_text, _ = read_report(cls.report_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path, cls.report_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_most_recent_has_new_data(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - GVI"], "4")
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Usual Party"], "Liberal Democrats")
+
+    def test_previous1_has_old_most_recent(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - GVI"], "1")
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - Usual Party"], "Greens")
+
+    def test_overflow_warning(self):
+        self.assertIn("Previous Data 4", self.report_text)
+
+
+class TestTTWSentinelValues(unittest.TestCase):
+    """TTW uses <NO RECORD> and <NO DATA RECORDED> as empty — should be treated as no data."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [make_app_row(**{
+            "First Name": "Test", "Surname": "Sentinel", "Post Code": "NW10 3JU",
+            f"{LE2026} Most Recent Data - Date": "<NO RECORD>",
+            f"{LE2026} Most Recent Data - GVI": "<NO RECORD>",
+            f"{LE2026} Most Recent Data - Usual Party": "<NO RECORD>",
+            f"{LE2026} Most Recent Data - Postal Voter": "<NO DATA RECORDED>",
+            f"{LE2026} Previous Data 4 - Date": "<NO RECORD>",
+            f"{LE2026} Previous Data 4 - GVI": "<NO RECORD>",
+            f"{LE2026} Previous Data 4 - Usual Party": "<NO RECORD>",
+        })]
+        cls.reg_rows = [make_register_row(
+            ElectorSurname="Sentinel", ElectorForename="Test",
+            PostCode="NW10 3JU", Party="G", **{"1-5": "1"})]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.report_path = cls.out_path + ".report.txt"
+        run_update(cls.app_path, cls.reg_path, cls.out_path, report_file=cls.report_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+        cls.report_text, _ = read_report(cls.report_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path, cls.report_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_new_values_written(self):
+        self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - GVI"], "1")
         self.assertEqual(self.rows[0][f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+
+    def test_sentinels_shifted_to_previous1(self):
+        """<NO RECORD> values shift verbatim — that's fine, they represent no prior data."""
+        self.assertEqual(self.rows[0][f"{LE2026} Previous Data 1 - GVI"], "<NO RECORD>")
+
+    def test_no_false_overflow_warning(self):
+        """Previous 4 had <NO RECORD> — should NOT warn about data loss."""
+        self.assertNotIn("content lost", self.report_text)
+
+
+class TestChangedOnlyFlag(unittest.TestCase):
+    """--changed-only outputs only rows that were actually modified."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [
+            make_app_row(**{"First Name": "Priya", "Surname": "Patel", "Post Code": "NW10 3JU"}),
+            make_app_row(**{"Voter Number": "HP1-5", "First Name": "Kenji", "Surname": "Tanaka", "Post Code": "NW10 3JU"}),
+            make_app_row(**{"Voter Number": "HP1-6", "First Name": "Sean", "Surname": "Murphy", "Post Code": "NW2 4PJ"}),
+        ]
+        # Register only has data for Patel
+        cls.reg_rows = [
+            make_register_row(ElectorSurname="Patel", ElectorForename="Priya",
+                              PostCode="NW10 3JU", **{"1-5": "1"}),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+
+        # Run with --changed-only
+        fd, cls.out_changed = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        run_update(cls.app_path, cls.reg_path, cls.out_changed,
+                   extra_args=["--changed-only"])
+        _, cls.rows_changed = read_output_csv(cls.out_changed)
+
+        # Run without --changed-only
+        fd, cls.out_all = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        run_update(cls.app_path, cls.reg_path, cls.out_all)
+        _, cls.rows_all = read_output_csv(cls.out_all)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_changed, cls.out_all]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_changed_only_has_one_row(self):
+        self.assertEqual(len(self.rows_changed), 1)
+
+    def test_changed_row_is_patel(self):
+        self.assertEqual(self.rows_changed[0]["Surname"], "Patel")
+
+    def test_all_rows_has_three(self):
+        self.assertEqual(len(self.rows_all), 3)
+
+
+class TestMatchedButNoNewData(unittest.TestCase):
+    """Matched row with no updatable data should NOT count as changed."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [
+            make_app_row(**{"First Name": "Priya", "Surname": "Patel", "Post Code": "NW10 3JU"}),
+        ]
+        # Register matches Patel but has no GVI, Party, Voted, DNK, Comments, etc.
+        cls.reg_rows = [
+            make_register_row(ElectorSurname="Patel", ElectorForename="Priya",
+                              PostCode="NW10 3JU"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        run_update(cls.app_path, cls.reg_path, cls.out_path, extra_args=["--changed-only"])
+        _, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_no_rows_in_output(self):
+        """Matched but nothing to update — should not appear in --changed-only output."""
+        self.assertEqual(len(self.rows), 0)
+
+
+class TestChangedOnlyNoMatches(unittest.TestCase):
+    """--changed-only with no matches produces header-only CSV."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [
+            make_app_row(**{"First Name": "Priya", "Surname": "Patel", "Post Code": "NW10 3JU"}),
+        ]
+        cls.reg_rows = [
+            make_register_row(ElectorSurname="Nobody", ElectorForename="John",
+                              PostCode="SW1A 1AA"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        run_update(cls.app_path, cls.reg_path, cls.out_path, extra_args=["--changed-only"])
+        cls.headers, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_zero_rows(self):
+        self.assertEqual(len(self.rows), 0)
+
+    def test_headers_present(self):
+        self.assertEqual(self.headers, APP_EXPORT_HEADERS)
 
 
 class TestGapFillSemantics(unittest.TestCase):
@@ -901,7 +1186,7 @@ class TestMultipleFieldsUpdated(unittest.TestCase):
         self.assertEqual(self.rows[0]["Board ticked"], "TRUE")
 
     def test_note(self):
-        self.assertEqual(self.rows[0]["Text of Note 1 (most recent)"], "A note")
+        self.assertEqual(self.rows[0]["Text of Note 1"], "A note")
 
 
 if __name__ == "__main__":

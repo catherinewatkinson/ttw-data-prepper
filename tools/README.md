@@ -4,22 +4,77 @@ Requires Python 3.7+ (standard library only — no additional packages needed).
 
 Tools for converting council electoral register data into the CSV format required by [TTW Digital](https://ttwdigital.co.uk), the Green Party's canvassing platform. Input encoding (UTF-8, Latin-1) is auto-detected.
 
+---
+
+## Quick Start: Clean up council register data
+
+**Run all commands in this README from the repository root directory** (the folder containing `tools/`).
+
+If you just want to clean up a council electoral register CSV for upload to TTW, this is all you need:
+
+```bash
+python3 tools/clean_register.py council_data.csv cleaned.csv
+```
+
+This will:
+- Normalise names (ALL CAPS → Title Case, handle Mc/Mac, apostrophes, hyphens)
+- Reformat addresses (flat numbers, building names, zero-pad flats, etc.)
+- Standardise postcodes
+- Map council column names to TTW column names
+- Generate a QA report at `cleaned.csv.report.txt` listing every change and any warnings
+
+Open the QA report and look for `NEEDS MANUAL FIX` warnings — those require editing the output CSV before upload.
+
+See [Address Formatting Rules](#address-formatting-rules) below for the full list of auto-fixes applied.
+
+**For address cleanup only, you can stop here — you don't need any of the other sections.**
+
+For more complex scenarios (merging multiple registers, adding canvassing data, updating an existing TTW export, finding unregistered members), see [Usage](#usage) below.
+
+---
+
 ## Tools Overview
+
+### Core conversion tools
 
 | Script | Purpose |
 |--------|---------|
-| `clean_register.py` | Main converter: council CSV → TTW upload format |
+| `clean_register.py` | Main converter: council CSV → TTW upload format (address cleanup, names, dates) |
 | `enrich_register.py` | Merge canvassing/election data into an existing TTW CSV |
 | `validate_enrichment.py` | Verify enrichment didn't corrupt base data |
+
+### App-export update tools
+
+| Script | Purpose |
+|--------|---------|
+| `update_app_export.py` | Update a TTW app-export CSV with fresh council register data (GVI, party, tags, notes) |
+| `validate_app_update.py` | Verify app-export update only modified expected fields |
+
+### Membership check tools
+
+| Script | Purpose |
+|--------|---------|
+| `check_membership_registration.py` | Cross-check a membership list against the register to find unregistered members |
+| `validate_membership_check.py` | Verify membership cross-check output is correct and uncorrupted |
+
+### Pipeline scripts
+
+| Script | Purpose |
+|--------|---------|
+| `run_pipeline.sh` | Automates clean → enrich → validate for a council register + canvassing data |
+| `run_merge_registers.sh` | Automates the three-step merge of two enriched registers |
+
+### Supporting files
+
+| Script | Purpose |
+|--------|---------|
 | `ttw_common.py` | Shared utilities (I/O, postcode validation, party mapping) |
+| `generate_dummy_data.py` | Generate sample test datasets |
 | `test_conversion.py` | Test suite for `clean_register.py` |
 | `test_enrichment.py` | Test suite for `enrich_register.py` |
 | `test_validation.py` | Test suite for `validate_enrichment.py` |
-| `check_membership_registration.py` | Cross-check membership list against register to find unregistered members |
-| `validate_membership_check.py` | Verify membership cross-check output is correct and uncorrupted |
-| `update_app_export.py` | Update TTW app-export CSV with council register data (GVI, party, tags, notes) |
-| `generate_dummy_data.py` | Generate sample test datasets |
 | `test_update_app_export.py` | Test suite for `update_app_export.py` |
+| `test_validate_app_update.py` | Test suite for `validate_app_update.py` |
 | `test_membership_check.py` | Test suite for `check_membership_registration.py` |
 | `test_validate_membership.py` | Test suite for `validate_membership_check.py` |
 
@@ -136,10 +191,97 @@ python3 tools/validate_enrichment.py final.csv \
 
 Exit code 0 = passed, 1 = failed. Use `--strict` to promote warnings to failures.
 
+### 7. Automated pipelines (shell scripts)
+
+For the common workflows, two shell scripts automate the multi-step processes:
+
+**`run_pipeline.sh`** — clean a register, optionally enrich with canvassing data, and validate:
+
+```bash
+# Clean register only
+./tools/run_pipeline.sh council_register.csv --clean-only
+
+# Clean + enrich with canvassing data
+./tools/run_pipeline.sh council_register.csv canvassing_export.csv
+
+# Custom election names
+./tools/run_pipeline.sh council_register.csv canvassing_export.csv \
+    --historic GE2024 --future LE2026
+```
+
+Output goes to a timestamped folder (e.g. `Cleaned-2026-04-08_14-23-45/` or `Cleaned-Merged-2026-04-08_14-23-45/`).
+
+**`run_merge_registers.sh`** — merge two council-format registers (primary + additional enrichment data), optionally with canvassing data:
+
+```bash
+# Merge two registers
+./tools/run_merge_registers.sh base_register.csv enriched_register.csv
+
+# Merge two registers + canvassing export
+./tools/run_merge_registers.sh base_register.csv enriched_register.csv canvassing_export.csv
+
+# Custom election names
+./tools/run_merge_registers.sh base_register.csv enriched_register.csv \
+    --historic GE2024 --future LE2026
+```
+
+This replaces the manual three-step process in section 5.
+
+### 8. Update an existing TTW app-export with fresh council data
+
+If you already have voter records in TTW and want to apply fresh canvassing data (GVI, party, postal voter, notes, tags) from a council register:
+
+```bash
+python3 tools/update_app_export.py app_export.csv register.csv updated.csv
+```
+
+Options:
+- `--changed-only` — output only rows that were actually modified (useful for a smaller re-upload)
+- `--date YYYY-MMM-DD` — override today's date for note timestamps (default: today)
+- `--match-threshold N` — fuzzy match threshold (default: 0.8)
+
+The script produces four output files:
+- `updated.csv` — the updated app-export (or only changed rows with `--changed-only`)
+- `updated.rejects2check.csv` — register rows with ambiguous, duplicate, or borderline matches (need manual review)
+- `updated.unmatched.csv` — register rows with no match in the app-export (moved away / not registered)
+- `updated.csv.report.txt` — QA report
+
+**Then validate the update:**
+
+```bash
+python3 tools/validate_app_update.py app_export.csv updated.csv
+```
+
+Add `--changed-only` if you used that flag on the update. This verifies that only amendable fields were modified — protected fields (Voter UUID, name, address) must be identical to the original.
+
+### 9. Find unregistered members
+
+Cross-check a Green Party membership list against the electoral register to find members who are not registered to vote:
+
+```bash
+python3 tools/check_membership_registration.py membership.csv register.csv unregistered.csv
+```
+
+Options:
+- `--strict` — exclude borderline possible matches from the output
+- `--match-threshold N` — fuzzy match threshold (default: 0.8)
+
+Output includes a `Match_Status` column showing why each row is in the output (`unmatched`, `out_of_area`, `no_postcode`, `ambiguous`, `possible`).
+
+**Then validate:**
+
+```bash
+python3 tools/validate_membership_check.py membership.csv register.csv unregistered.csv
+```
+
 ### `clean_register.py` options
 
 | Flag | Description |
 |------|-------------|
+| `--mode` | `register` (default) or `register+elections` |
+| `--elections` | Election names (used as column prefixes when mode is `register+elections`) |
+| `--election-types` | Per election: `historic` or `future` (same order as `--elections`) |
+| `--enriched-columns` | Map GE24→historic Voted, Party/1-5→future election columns |
 | `--strip-extra` | Remove non-TTW extra columns (Email, Phone, DNK, etc.) from output |
 | `--strip-empty` | Remove entirely-empty optional columns (Address3-6, UPRN, etc.) |
 | `--date-format DMY` | Input date format hint: `DMY` (default), `YMD`, or `MDY` |
@@ -315,10 +457,22 @@ Always review the QA report after conversion, paying particular attention to:
 
 ## Running Tests
 
+Run all tests:
+
+```bash
+python3 -m pytest tools/ -v
+```
+
+Or run individual test files:
+
 ```bash
 python3 tools/test_conversion.py -v
 python3 tools/test_enrichment.py -v
 python3 tools/test_validation.py -v
+python3 tools/test_update_app_export.py -v
+python3 tools/test_validate_app_update.py -v
+python3 tools/test_membership_check.py -v
+python3 tools/test_validate_membership.py -v
 ```
 
 ---
