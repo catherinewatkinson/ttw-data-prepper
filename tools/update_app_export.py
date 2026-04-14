@@ -475,6 +475,29 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
             second_score = scored[1][0]
             is_ambiguous = (best_score - second_score) < AMBIGUITY_MARGIN
 
+            # A perfect score (1.0) beats any imperfect second score:
+            # treat as a clean match, but still flag in rejects2check (with a
+            # distinct "auto-resolved" reason) so the user can spot-verify.
+            if is_ambiguous and best_score == 1.0 and second_score < 1.0:
+                runner_up_info = []
+                for s in scored[1:]:
+                    if s[0] >= effective_threshold:
+                        report.force_include_indices.add(s[1])
+                        app_r = app_rows[s[1]]
+                        uuid = app_r.get("Voter UUID", "").strip()
+                        vn = app_r.get(ROW_KEY, "").strip()
+                        runner_up_info.append(
+                            f"{s[3]} {s[2]} (Voter={vn}, UUID={uuid}, score={s[0]:.2f})")
+                winner_app = app_rows[best_idx]
+                winner_uuid = winner_app.get("Voter UUID", "").strip()
+                winner_vn = winner_app.get(ROW_KEY, "").strip()
+                report.rejects2check.append((
+                    reg_row,
+                    f"Auto-resolved to perfect match (please spot-check): "
+                    f"applied to {best_name} (Voter={winner_vn}, UUID={winner_uuid}, "
+                    f"score=1.00); runner-up(s): {'; '.join(runner_up_info)}"))
+                is_ambiguous = False
+
             if is_ambiguous:
                 # Try tiebreakers: Voter Number, then DoA, then address
                 resolved_idx = None
@@ -556,8 +579,9 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
             report.possible_details.append(
                 (reg_name, reg_pc, best_score, best_name))
             report.force_include_indices.add(best_idx)
+            best_uuid = app_rows[best_idx].get("Voter UUID", "").strip()
             report.rejects2check.append((
-                reg_row, f"Possible match only (score={best_score:.2f}, best='{best_name}')"))
+                reg_row, f"Possible match only (score={best_score:.2f}, best='{best_name}', UUID={best_uuid})"))
         else:
             report.unmatched += 1
             report.unmatched_details.append((reg_name, reg_pc))
@@ -647,7 +671,7 @@ def apply_updates(app_rows, matched, report, data_date):
 
         # --- Postal Voter: simple overwrite (no Previous slots exist for it) ---
         pv = _get_postal_voter(reg_row)
-        if pv and pv.upper() not in ("N", "NO"):
+        if pv and pv.upper() not in ("N", "NO", "FALSE"):
             _set(LE2026_POSTAL, "Y", "LE2026 Postal Voter")
 
         # --- P/PB -> Poster/Board tags ---

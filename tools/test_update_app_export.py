@@ -1189,5 +1189,141 @@ class TestMultipleFieldsUpdated(unittest.TestCase):
         self.assertEqual(self.rows[0]["Text of Note 1"], "A note")
 
 
+class TestPerfectScoreAutoResolve(unittest.TestCase):
+    """A score=1.0 match against an imperfect runner-up is auto-resolved:
+    data is applied to the perfect match, the runner-up appears in --changed-only
+    output via force_include_indices, and the register row is logged to
+    rejects2check with the 'Auto-resolved to perfect match' prefix so the user
+    can spot-check."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Priya Patel (perfect match, score 1.0) + Priyanka Patel (spouse, ~0.89)
+        # at the same postcode. Register row has Party+GVI to update.
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-1", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU", "Voter UUID": "uuid-priya",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-2", "First Name": "Priyanka", "Surname": "Patel",
+                "Post Code": "NW10 3JU", "Voter UUID": "uuid-priyanka",
+            }),
+        ]
+        cls.reg_rows = [
+            make_register_row(
+                ElectorSurname="Patel", ElectorForename="Priya",
+                PostCode="NW10 3JU", Party="G", **{"1-5": "1"}),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.report_path = cls.out_path + ".report.txt"
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        cls.rc, _, cls.stderr = run_update(
+            cls.app_path, cls.reg_path, cls.out_path,
+            extra_args=["--changed-only"], report_file=cls.report_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+        cls.report_text, cls.machine_lines = read_report(cls.report_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path,
+                  cls.report_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0, self.stderr)
+
+    def test_perfect_match_row_updated(self):
+        priya = [r for r in self.rows if r["First Name"] == "Priya"][0]
+        self.assertEqual(priya[f"{LE2026} Most Recent Data - GVI"], "1")
+        self.assertEqual(priya[f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+
+    def test_runner_up_in_changed_only_output(self):
+        priyanka = [r for r in self.rows if r["First Name"] == "Priyanka"]
+        self.assertEqual(len(priyanka), 1,
+            "Runner-up should appear in --changed-only output via force_include_indices")
+
+    def test_runner_up_unchanged(self):
+        priyanka = [r for r in self.rows if r["First Name"] == "Priyanka"][0]
+        self.assertEqual(priyanka[f"{LE2026} Most Recent Data - GVI"], "")
+        self.assertEqual(priyanka[f"{LE2026} Most Recent Data - Usual Party"], "")
+
+    def test_ambiguous_counter_not_incremented(self):
+        """Auto-resolved rows are treated as matched, not ambiguous."""
+        self.assertIn("Ambiguous: 0", self.report_text)
+        self.assertIn("Matched: 1", self.report_text)
+        # No AMBIGUOUS| entry in machine-readable section either
+        ambiguous_lines = [l for l in self.machine_lines if l.startswith("AMBIGUOUS|")]
+        self.assertEqual(ambiguous_lines, [])
+
+    def test_rejects2check_contains_auto_resolve_entry(self):
+        self.assertTrue(os.path.exists(self.rejects_path),
+            "rejects2check.csv should be written")
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            rejects = list(csv.DictReader(f))
+        self.assertEqual(len(rejects), 1)
+        reason = rejects[0]["Reject_Reason"]
+        self.assertTrue(reason.startswith("Auto-resolved to perfect match"),
+            f"Unexpected reason prefix: {reason!r}")
+
+    def test_reject_reason_includes_winner_and_runnerup_ids(self):
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reason = list(csv.DictReader(f))[0]["Reject_Reason"]
+        self.assertIn("KG1-1", reason)      # winner Voter Number
+        self.assertIn("uuid-priya", reason)  # winner UUID
+        self.assertIn("KG1-2", reason)      # runner-up Voter Number
+        self.assertIn("uuid-priyanka", reason)  # runner-up UUID
+
+
+class TestTruePerfectTieFallsThroughToTiebreakers(unittest.TestCase):
+    """Two candidates both at score=1.0 (e.g. duplicate app rows) must NOT
+    trigger the perfect-match auto-resolve: the second_score < 1.0 guard means
+    normal tiebreaker/ambiguous handling takes over."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Two app rows with identical name+postcode (data-entry duplicate)
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-1", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-2", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+        ]
+        cls.reg_rows = [
+            make_register_row(ElectorSurname="Patel", ElectorForename="Priya",
+                              PostCode="NW10 3JU", Party="G"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.report_path = cls.out_path + ".report.txt"
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        run_update(cls.app_path, cls.reg_path, cls.out_path,
+                   report_file=cls.report_path)
+        cls.report_text, _ = read_report(cls.report_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path,
+                  cls.report_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_not_auto_resolved(self):
+        """With two 1.0-score candidates, normal ambiguous handling must fire —
+        NOT the perfect-match auto-resolve branch."""
+        if os.path.exists(self.rejects_path):
+            with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+                reasons = [r["Reject_Reason"] for r in csv.DictReader(f)]
+            for reason in reasons:
+                self.assertFalse(reason.startswith("Auto-resolved to perfect match"),
+                    f"Two-1.0-tie should not trigger auto-resolve, got: {reason!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

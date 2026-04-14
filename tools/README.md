@@ -23,13 +23,30 @@ This will:
 - Map council column names to TTW column names
 - Generate a QA report at `cleaned.csv.report.txt` listing every change and any warnings
 
-Open the QA report and look for `NEEDS MANUAL FIX` warnings — those require editing the output CSV before upload.
+**Verify the output:**
+
+Open `cleaned.csv.report.txt` — this is the QA report listing every change made. Check for:
+- `NEEDS MANUAL FIX` warnings — these require editing the output CSV before upload
+- Name case changes — verify Mc/Mac names were handled correctly
+- Duplicate elector warnings
+- `CRITICAL` banner at the top — if present, stop and resolve before uploading
+
+The report has a **Summary** section (total rows, fixes, warnings) and a **Fixes Applied** section showing every individual change with row numbers, old values, and new values so you can verify each one.
+
+**Run the automated verification tool** to check the output CSV is well-formed:
+
+```bash
+python3 tools/test_conversion.py --verify cleaned.csv \
+    --input council_data.csv --report cleaned.csv.report.txt
+```
+
+This checks: UTF-8 BOM, CRLF line endings, no council columns leaked, required TTW columns present, Full Elector No. format and uniqueness, election field values, row count matches input minus deletions, all input names traceable in output, and polling district completeness. Exit code 0 = all checks passed.
 
 See [Address Formatting Rules](#address-formatting-rules) below for the full list of auto-fixes applied.
 
 **For address cleanup only, you can stop here — you don't need any of the other sections.**
 
-For more complex scenarios (merging multiple registers, adding canvassing data, updating an existing TTW export, finding unregistered members), see [Usage](#usage) below.
+For more complex scenarios (processing electoral updates, merging multiple registers, adding canvassing data, updating an existing TTW export, finding unregistered members), see [Usage](#usage) below.
 
 ---
 
@@ -103,7 +120,43 @@ You can upload incrementally — as little or as much of the register as you wan
 python3 tools/clean_register.py council_data.csv cleaned.csv
 ```
 
-### 2. Convert with election data (enriched spreadsheet)
+### 2. Process electoral updates (additions, amendments, deletions)
+
+The council provides periodic update files containing new voters (N), amendments to existing records (A), and deletions (D), identified by a `ChangeTypeID` column.
+
+To process these correctly, the tool needs a reference copy of the current register as it exists in TTW. Download this from TTW via **Data Export**, then pass it with `--full-register`:
+
+```bash
+python3 tools/clean_register.py electoral_update.csv cleaned_update.csv \
+    --full-register ttw_app_export.csv
+```
+
+This will:
+- **N (New) rows**: Assign unique elector numbers that don't clash with existing TTW data. Zero-pad flat/building numbers to match the full register's formatting.
+- **A (Amendment) rows**: Match each row to the correct existing TTW entry using name + address similarity scoring, and assign the matching elector number suffix.
+- **D (Deletion) rows**: Same as amendments — matched to the correct existing TTW entry.
+
+The `--full-register` file can be either:
+- A **TTW app-export CSV** (downloaded via Data Export — has `Voter Number`, `First Name`, `House Name`, etc.)
+- A **previously cleaned register** (output from a prior `clean_register.py` run — has `Elector No. Prefix`, `Forename`, `Address1`, etc.)
+
+The tool auto-detects the format.
+
+**Important**: If `ChangeTypeID` is present in the input but `--full-register` is not provided, the script will exit with an error telling you to download the register from TTW.
+
+**Then verify the output:**
+
+```bash
+python3 tools/test_conversion.py --verify cleaned_update.csv \
+    --input electoral_update.csv --report cleaned_update.csv.report.txt
+```
+
+**Check the QA report carefully:**
+- A `CRITICAL` banner means A/D rows could not be uniquely matched — these need manual review
+- Low-confidence match warnings mean the tool's best guess may be wrong
+- Look for "no reference entry" warnings — these A/D rows had no matching elector number in the TTW data
+
+### 3. Convert with election data (enriched spreadsheet)
 
 If your input spreadsheet has canvassing columns (GE24, Party, 1-5) alongside the register:
 
@@ -119,7 +172,7 @@ python3 tools/clean_register.py council_data.csv cleaned.csv \
 - `--election-types`: `historic` (generates Voted column) or `future` (generates Green Voting Intention, Party, Postal Voter)
 - `--enriched-columns`: Maps GE24 → historic Voted, Party/1-5 → future election columns
 
-### 3. Strip non-TTW columns for upload
+### 4. Strip non-TTW columns for upload
 
 ```bash
 python3 tools/clean_register.py council_data.csv upload_ready.csv \
@@ -132,7 +185,7 @@ python3 tools/clean_register.py council_data.csv upload_ready.csv \
 
 `--strip-extra` removes Email, Phone, DNK, Comments, etc. — keeping only TTW-required columns.
 
-### 4. Enrich an existing TTW CSV with additional data
+### 5. Enrich an existing TTW CSV with additional data
 
 ```bash
 python3 tools/enrich_register.py base_ttw.csv enriched_output.csv \
@@ -143,7 +196,7 @@ python3 tools/enrich_register.py base_ttw.csv enriched_output.csv \
     --future-elections LE2026
 ```
 
-### 5. Merge two enriched register datasets
+### 6. Merge two enriched register datasets
 
 When you have two versions of the electoral register with enrichment data — e.g. a primary register (Dataset 1) and a second register with additional canvassing data (Dataset 2) — use a three-step process:
 
@@ -181,7 +234,7 @@ python3 tools/enrich_register.py enriched.csv final.csv \
 
 Both passes use fuzzy matching on name + postcode to match rows between datasets. Review the QA reports from each step to check match quality.
 
-### 6. Validate enrichment
+### 7. Validate enrichment
 
 ```bash
 python3 tools/validate_enrichment.py final.csv \
@@ -191,7 +244,7 @@ python3 tools/validate_enrichment.py final.csv \
 
 Exit code 0 = passed, 1 = failed. Use `--strict` to promote warnings to failures.
 
-### 7. Automated pipelines (shell scripts)
+### 8. Automated pipelines (shell scripts)
 
 For the common workflows, two shell scripts automate the multi-step processes:
 
@@ -225,9 +278,9 @@ Output goes to a timestamped folder (e.g. `Cleaned-2026-04-08_14-23-45/` or `Cle
     --historic GE2024 --future LE2026
 ```
 
-This replaces the manual three-step process in section 5.
+This replaces the manual three-step process in section 6.
 
-### 8. Update an existing TTW app-export with fresh council data
+### 9. Update an existing TTW app-export with fresh council data
 
 If you already have voter records in TTW and want to apply fresh canvassing data (GVI, party, postal voter, notes, tags) from a council register:
 
@@ -254,7 +307,7 @@ python3 tools/validate_app_update.py app_export.csv updated.csv
 
 Add `--changed-only` if you used that flag on the update. This verifies that only amendable fields were modified — protected fields (Voter UUID, name, address) must be identical to the original.
 
-### 9. Find unregistered members
+### 10. Find unregistered members
 
 Cross-check a Green Party membership list against the electoral register to find members who are not registered to vote:
 

@@ -3025,16 +3025,26 @@ def run_verification(args):
     else:
         report("fail", "CRLF Line Endings", f"{lf_only} lines with LF-only")
 
-    # Check no council columns leaked
-    council_cols = {"PDCode", "RollNo", "ElectorTitle", "ElectorSurname",
-                    "ElectorForename", "ElectorMiddleName", "IERStatus",
-                    "DateOfAttainment", "FranchiseMarker", "RegisteredAddress1",
-                    "SubHouse", "House"}
-    leaked = council_cols & set(out_headers)
+    # Check no mapped council columns leaked (columns that should have been renamed)
+    # These are source columns in FIELD_MAP that should now be TTW names
+    mapped_council_cols = {"PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+                           "ElectorMiddleName", "DateOfAttainment",
+                           "RegisteredAddress1", "RegisteredAddress2",
+                           "RegisteredAddress3", "RegisteredAddress4",
+                           "RegisteredAddress5", "RegisteredAddress6"}
+    # These are council-only columns that are deliberately preserved as extra columns
+    preserved_council_cols = {"ElectorTitle", "IERStatus", "FranchiseMarker",
+                              "SubHouse", "House", "MethodOfVerification", "ElectorID",
+                              "Euro", "Parl", "County", "Ward", "ChangeTypeID"}
+    leaked = mapped_council_cols & set(out_headers)
+    preserved = preserved_council_cols & set(out_headers)
     if not leaked:
-        report("pass", "No Council Columns", "Output uses TTW column names only")
+        msg = "Output uses TTW column names (no mapped columns leaked)"
+        if preserved:
+            msg += f". Preserved council columns: {preserved}"
+        report("pass", "Column Mapping", msg)
     else:
-        report("fail", "No Council Columns", f"Leaked: {leaked}")
+        report("fail", "Column Mapping", f"Mapped council columns still in output: {leaked}")
 
     # Check required TTW columns
     required = {"Elector No. Prefix", "Elector No.", "Full Elector No.",
@@ -3855,6 +3865,796 @@ class TestAliasEntries(unittest.TestCase):
         finally:
             os.unlink(tmp.name)
             os.unlink(tmp_out.name)
+
+
+# ---------------------------------------------------------------------------
+# Pad-reference tests
+# ---------------------------------------------------------------------------
+
+def _write_temp_csv(rows, headers, encoding="utf-8-sig"):
+    """Write rows to a temp CSV and return the path."""
+    fd, path = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
+    with open(path, "w", encoding=encoding, newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers, lineterminator="\r\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+_PAD_COUNCIL_HEADERS = [
+    "PDCode", "RollNo", "ElectorSurname", "ElectorForename",
+    "RegisteredAddress1", "RegisteredAddress2", "PostCode",
+]
+
+_PAD_TTW_HEADERS = [
+    "Elector No. Prefix", "Elector No.", "Elector No. Suffix", "Full Elector No.",
+    "Surname", "Forename", "Address1", "Address2", "PostCode",
+]
+
+
+def _make_council_row(pdcode, rollno, surname, forename, addr1, addr2, postcode):
+    base = {h: "" for h in _PAD_COUNCIL_HEADERS}
+    base.update({"PDCode": pdcode, "RollNo": rollno, "ElectorSurname": surname,
+                 "ElectorForename": forename, "RegisteredAddress1": addr1,
+                 "RegisteredAddress2": addr2, "PostCode": postcode})
+    return base
+
+
+def _make_ttw_row(addr1, addr2, postcode):
+    base = {h: "" for h in _PAD_TTW_HEADERS}
+    base.update({"Address1": addr1, "Address2": addr2, "PostCode": postcode,
+                 "Elector No. Prefix": "KG1", "Elector No.": "1",
+                 "Elector No. Suffix": "0", "Full Elector No.": "KG1-1-0",
+                 "Surname": "Test", "Forename": "Test"})
+    return base
+
+
+class TestPadReference(unittest.TestCase):
+    """Tests for --full-register flag on zero-padding."""
+
+    def _run_with_reference(self, update_rows, reference_rows):
+        update_path = _write_temp_csv(update_rows, _PAD_COUNCIL_HEADERS)
+        ref_path = _write_temp_csv(reference_rows, _PAD_TTW_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      extra_args=["--full-register", ref_path])
+            self.assertEqual(rc, 0, stderr)
+            return read_output_csv(out_path)
+        finally:
+            for p in [update_path, ref_path, out_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def _run_without_reference(self, update_rows):
+        update_path = _write_temp_csv(update_rows, _PAD_COUNCIL_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path)
+            self.assertEqual(rc, 0, stderr)
+            return read_output_csv(out_path)
+        finally:
+            for p in [update_path, out_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_flat_padded_with_reference(self):
+        """Single Flat 5 in update. Reference has Flat 1-20. Should pad to Flat 05."""
+        update = [_make_council_row("KG1", "1", "Test", "A", "Flat 5", "30 High Road", "NW10 3JU")]
+        ref = [_make_ttw_row(f"Flat {i}", "30 High Road", "NW10 3JU") for i in range(1, 21)]
+        _, rows = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Flat 05")
+
+    def test_flat_not_padded_without_reference(self):
+        """Single Flat 5 without reference. Width=1, should NOT pad."""
+        update = [_make_council_row("KG1", "1", "Test", "A", "Flat 5", "30 High Road", "NW10 3JU")]
+        _, rows = self._run_without_reference(update)
+        self.assertEqual(rows[0]["Address1"], "Flat 5")
+
+    def test_building_padded_with_reference(self):
+        """Single '3 Sheil Court' in update. Reference has Sheil Court 1-15. Should pad to 03."""
+        update = [_make_council_row("KG1", "1", "Test", "A", "3 Sheil Court", "30 High Road", "NW10 3JU")]
+        ref = [_make_ttw_row(f"Sheil Court {i}", "30 High Road", "NW10 3JU") for i in range(1, 16)]
+        _, rows = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Sheil Court 03")
+
+    def test_unknown_building_falls_back(self):
+        """Update has a building not in reference. Falls back to own data."""
+        update = [_make_council_row("KG1", "1", "Test", "A", "Flat 5", "99 Unknown Road", "NW10 9ZZ")]
+        ref = [_make_ttw_row(f"Flat {i}", "30 High Road", "NW10 3JU") for i in range(1, 21)]
+        _, rows = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Flat 5")
+
+    def test_wider_in_update_uses_wider(self):
+        """Reference max width 1. Update has Flat 100. Should use width 3."""
+        update = [
+            _make_council_row("KG1", "1", "Test", "A", "Flat 5", "30 High Road", "NW10 3JU"),
+            _make_council_row("KG1", "2", "Test", "B", "Flat 100", "30 High Road", "NW10 3JU"),
+        ]
+        ref = [_make_ttw_row(f"Flat {i}", "30 High Road", "NW10 3JU") for i in range(1, 10)]
+        _, rows = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Flat 005")
+        self.assertEqual(rows[1]["Address1"], "Flat 100")
+
+    def test_letter_suffix_with_reference(self):
+        """Reference has Flat 1A-12B. Update has Flat 5. Width from numeric part -> pad to 2."""
+        ref = [_make_ttw_row(f"Flat {i}A", "30 High Road", "NW10 3JU") for i in range(1, 13)]
+        update = [_make_council_row("KG1", "1", "Test", "A", "Flat 5", "30 High Road", "NW10 3JU")]
+        _, rows = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Flat 05")
+
+
+class TestSuffixReference(unittest.TestCase):
+    """Tests for suffix-aware --full-register: decimal RollNos skip existing suffixes."""
+
+    def _make_ref_row(self, prefix, number, suffix):
+        """Create a TTW-format reference row with specific elector number parts."""
+        row = _make_ttw_row("Flat 1", "30 High Road", "NW10 3JU")
+        row["Elector No. Prefix"] = prefix
+        row["Elector No."] = number
+        row["Elector No. Suffix"] = suffix
+        fen = f"{prefix}-{number}-{suffix}" if suffix else f"{prefix}-{number}"
+        row["Full Elector No."] = fen
+        return row
+
+    def _run_with_reference(self, update_rows, reference_rows):
+        update_path = _write_temp_csv(update_rows, _PAD_COUNCIL_HEADERS)
+        ref_path = _write_temp_csv(reference_rows, _PAD_TTW_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        fd2, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd2)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      extra_args=["--full-register", ref_path],
+                                      report_file=report_path)
+            self.assertEqual(rc, 0, stderr)
+            headers, rows = read_output_csv(out_path)
+            report_text = Path(report_path).read_text(encoding="utf-8")
+            return headers, rows, report_text
+        finally:
+            for p in [update_path, ref_path, out_path, report_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def _run_without_reference(self, update_rows):
+        update_path = _write_temp_csv(update_rows, _PAD_COUNCIL_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path)
+            self.assertEqual(rc, 0, stderr)
+            return read_output_csv(out_path)
+        finally:
+            for p in [update_path, out_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_decimal_suffixes_skip_existing(self):
+        """Reference has KG1-1416 with suffix 0. Update has 1416.5 and 1416.75.
+        Should get suffixes 1 and 2 (skipping 0)."""
+        ref = [self._make_ref_row("KG1", "1416", "0")]
+        update = [
+            _make_council_row("KG1", "1416.5", "Test", "A", "Flat 1", "High Road", "NW10 3JU"),
+            _make_council_row("KG1", "1416.75", "Test", "B", "Flat 2", "High Road", "NW10 3JU"),
+        ]
+        _, rows, _ = self._run_with_reference(update, ref)
+        suffixes = [r["Elector No. Suffix"] for r in rows]
+        self.assertEqual(suffixes, ["1", "2"])
+
+    def test_decimal_suffixes_without_reference(self):
+        """Without reference, 1416.5 and 1416.75 get suffixes 0 and 1."""
+        update = [
+            _make_council_row("KG1", "1416.5", "Test", "A", "Flat 1", "High Road", "NW10 3JU"),
+            _make_council_row("KG1", "1416.75", "Test", "B", "Flat 2", "High Road", "NW10 3JU"),
+        ]
+        _, rows = self._run_without_reference(update)
+        suffixes = [r["Elector No. Suffix"] for r in rows]
+        self.assertEqual(suffixes, ["0", "1"])
+
+    def test_decimal_suffixes_skip_multiple_existing(self):
+        """Reference has suffixes 0 and 1. Update decimal should get suffix 2."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0"),
+            self._make_ref_row("KG1", "100", "1"),
+        ]
+        update = [
+            _make_council_row("KG1", "100.5", "Test", "A", "Flat 1", "High Road", "NW10 3JU"),
+        ]
+        _, rows, _ = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "2")
+
+    def test_different_prefix_no_clash(self):
+        """Reference has KG1-100 suffix 0. Update has HP1-100.5. Different prefix = no clash."""
+        ref = [self._make_ref_row("KG1", "100", "0")]
+        update = [
+            _make_council_row("HP1", "100.5", "Test", "A", "Flat 1", "High Road", "NW10 3JU"),
+        ]
+        _, rows, _ = self._run_with_reference(update, ref)
+        # HP1-100 has no reference entry, so suffix starts at 0
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_full_elector_no_built_correctly(self):
+        """Verify Full Elector No. uses the correct suffix after reference skip."""
+        ref = [self._make_ref_row("KG1", "50", "0")]
+        update = [
+            _make_council_row("KG1", "50.5", "Test", "A", "Flat 1", "High Road", "NW10 3JU"),
+        ]
+        _, rows, _ = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Full Elector No."], "KG1-50-1")
+
+    def test_clash_detection_in_report(self):
+        """If a clash would have occurred, suffix is reassigned and logged."""
+        ref = [self._make_ref_row("KG1", "200", "0")]
+        update = [
+            _make_council_row("KG1", "200", "Test", "A", "Flat 1", "High Road", "NW10 3JU"),
+        ]
+        _, rows, report = self._run_with_reference(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+        self.assertEqual(rows[0]["Full Elector No."], "KG1-200-1")
+        self.assertIn("clash", report.lower())
+
+    def test_multi_row_clash_each_gets_distinct_suffix(self):
+        """Two non-decimal update rows both default to suffix 0, reference has 0.
+        Each must get a distinct suffix (1 and 2), and the CORRECT row is modified."""
+        ref = [self._make_ref_row("KG1", "300", "0")]
+        # Note: _make_council_row args are (pdcode, rollno, SURNAME, FORENAME, ...)
+        update = [
+            _make_council_row("KG1", "300", "Smith", "Alice", "Flat 1", "High Road", "NW10 3JU"),
+            _make_council_row("KG1", "300", "Jones", "Bob", "Flat 2", "High Road", "NW10 3JU"),
+        ]
+        _, rows, _ = self._run_with_reference(update, ref)
+        self.assertEqual(len(rows), 2)
+        # Both rows should have distinct suffixes, neither should be "0"
+        suffixes = {r["Elector No. Suffix"] for r in rows}
+        self.assertNotIn("0", suffixes, "Suffix 0 clashes with reference")
+        self.assertEqual(len(suffixes), 2, "Each row must have a distinct suffix")
+        # Verify correct row has correct name (shadowing bug would modify wrong row)
+        alice = [r for r in rows if r["Forename"] == "Alice"][0]
+        bob = [r for r in rows if r["Forename"] == "Bob"][0]
+        self.assertNotEqual(alice["Elector No. Suffix"], bob["Elector No. Suffix"])
+        self.assertIn(alice["Elector No. Suffix"], alice["Full Elector No."])
+        self.assertIn(bob["Elector No. Suffix"], bob["Full Elector No."])
+
+
+# ---------------------------------------------------------------------------
+# TTW app-export reference tests
+# ---------------------------------------------------------------------------
+
+# Minimal TTW app-export headers (what build_padding_reference reads)
+_APP_EXPORT_REF_HEADERS = [
+    "Voter Number", "First Name", "Middle Name", "Surname",
+    "House Name", "House Number", "Road", "Post Code",
+]
+
+
+def _make_app_ref_row(voter_number, first_name="Test", surname="Test",
+                       house_name="", house_number="", road="High Road",
+                       post_code="NW10 3JU"):
+    base = {h: "" for h in _APP_EXPORT_REF_HEADERS}
+    base.update({
+        "Voter Number": voter_number,
+        "First Name": first_name,
+        "Surname": surname,
+        "House Name": house_name,
+        "House Number": house_number,
+        "Road": road,
+        "Post Code": post_code,
+    })
+    return base
+
+
+class TestAppExportReference(unittest.TestCase):
+    """Tests for --full-register with TTW app-export CSV format."""
+
+    def _run_with_app_ref(self, update_rows, reference_rows, update_headers=None):
+        headers = update_headers or _PAD_COUNCIL_HEADERS
+        update_path = _write_temp_csv(update_rows, headers)
+        ref_path = _write_temp_csv(reference_rows, _APP_EXPORT_REF_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        fd2, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd2)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      extra_args=["--full-register", ref_path],
+                                      report_file=report_path)
+            self.assertEqual(rc, 0, stderr)
+            headers_out, rows = read_output_csv(out_path)
+            report_text = Path(report_path).read_text(encoding="utf-8")
+            return headers_out, rows, report_text
+        finally:
+            for p in [update_path, ref_path, out_path, report_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_flat_padded_from_app_export_ref(self):
+        """App-export ref has Flat 1-20. Single update Flat 5 pads to Flat 05."""
+        ref = [_make_app_ref_row(f"KG1-{i}-0", house_name=f"Flat {i}",
+                                  road="30 High Road")
+               for i in range(1, 21)]
+        update = [_make_council_row("KG1", "99", "New", "Person",
+                                     "Flat 5", "30 High Road", "NW10 3JU")]
+        _, rows, _ = self._run_with_app_ref(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Flat 05")
+
+    def test_building_padded_from_app_export_ref(self):
+        """App-export ref has Sheil Court 1-15. Single update pads to 03."""
+        ref = [_make_app_ref_row(f"KG1-{i}-0", house_name="Sheil Court",
+                                  house_number=str(i), road="High Road")
+               for i in range(1, 16)]
+        update = [_make_council_row("KG1", "99", "New", "Person",
+                                     "3 Sheil Court", "High Road", "NW10 3JU")]
+        _, rows, _ = self._run_with_app_ref(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Sheil Court 03")
+
+    def test_suffix_from_app_export_voter_number(self):
+        """A/D row matched to app-export ref by Voter Number suffix."""
+        ref = [_make_app_ref_row("KG1-100-0", first_name="John", surname="Smith",
+                                  house_name="Flat 1", road="High Road")]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run_with_app_ref(update, ref,
+                                             update_headers=_PAD_COUNCIL_HEADERS_CT)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_suffix_multi_candidate_from_app_export(self):
+        """Two app-export entries with same prefix-number, A row picks correct one by name."""
+        ref = [
+            _make_app_ref_row("KG1-100-0", first_name="John", surname="Smith",
+                               house_name="Flat 1", road="High Road"),
+            _make_app_ref_row("KG1-100-1", first_name="Jane", surname="Smith",
+                               house_name="Flat 1", road="High Road"),
+        ]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "Jane",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run_with_app_ref(update, ref,
+                                             update_headers=_PAD_COUNCIL_HEADERS_CT)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+
+    def test_n_row_skips_app_export_suffixes(self):
+        """N row avoids suffix already taken in app-export ref."""
+        ref = [_make_app_ref_row("KG1-100-0", first_name="John", surname="Smith")]
+        update = [_make_council_row_ct("KG1", "100.5", "New", "Person",
+                                        "Flat 3", "High Road", "NW10 3JU", "N")]
+        _, rows, _ = self._run_with_app_ref(update, ref,
+                                             update_headers=_PAD_COUNCIL_HEADERS_CT)
+        self.assertNotEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_dummy_voter_number_excluded(self):
+        """Voter Number '--0' (dummy) should not pollute suffix data."""
+        ref = [
+            _make_app_ref_row("--0", first_name="Dummy", surname="Entry"),
+            _make_app_ref_row("KG1-100-0", first_name="John", surname="Smith"),
+        ]
+        update = [_make_council_row_ct("KG1", "100.5", "New", "Person",
+                                        "Flat 3", "High Road", "NW10 3JU", "N")]
+        _, rows, _ = self._run_with_app_ref(update, ref,
+                                             update_headers=_PAD_COUNCIL_HEADERS_CT)
+        # Should get suffix 1 (skipping 0 from KG1-100), not affected by --0 dummy
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+
+    def test_post_code_with_space_handled(self):
+        """App-export 'Post Code' (with space) works for padding grouping."""
+        ref = [_make_app_ref_row(f"KG1-{i}-0", house_name=f"Flat {i}",
+                                  road="30 High Road", post_code="NW10 3JU")
+               for i in range(1, 21)]
+        update = [_make_council_row("KG1", "99", "New", "Person",
+                                     "Flat 5", "30 High Road", "NW10 3JU")]
+        _, rows, _ = self._run_with_app_ref(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Flat 05")
+
+    def test_malformed_voter_numbers_in_reference(self):
+        """Reference with malformed Voter Numbers should not crash."""
+        ref = [
+            _make_app_ref_row("KG1-100-0", first_name="John", surname="Smith"),
+            _make_app_ref_row("", first_name="Bad", surname="Entry"),
+            _make_app_ref_row("malformed", first_name="Also", surname="Bad"),
+        ]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run_with_app_ref(update, ref,
+                                             update_headers=_PAD_COUNCIL_HEADERS_CT)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_no_record_sentinel_in_reference_names(self):
+        """Reference with <NO RECORD> names falls back to address matching."""
+        ref = [
+            _make_app_ref_row("KG1-100-0", first_name="<NO RECORD>",
+                               surname="<NO RECORD>",
+                               house_name="Flat 1", road="High Road"),
+            _make_app_ref_row("KG1-100-1", first_name="Mary", surname="Jones",
+                               house_name="Flat 2", road="High Road"),
+        ]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run_with_app_ref(update, ref,
+                                             update_headers=_PAD_COUNCIL_HEADERS_CT)
+        # Should match suffix 0 via address since name can't help
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_empty_reference_fields(self):
+        """Reference rows with all empty address fields don't crash."""
+        ref = [
+            _make_app_ref_row("KG1-100-0", first_name="John", surname="Smith",
+                               house_name="", house_number="", road=""),
+        ]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run_with_app_ref(update, ref,
+                                             update_headers=_PAD_COUNCIL_HEADERS_CT)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+
+# ---------------------------------------------------------------------------
+# ChangeTypeID-aware suffix tests
+# ---------------------------------------------------------------------------
+
+_PAD_COUNCIL_HEADERS_CT = _PAD_COUNCIL_HEADERS + ["ChangeTypeID"]
+
+
+def _make_council_row_ct(pdcode, rollno, surname, forename, addr1, addr2, postcode,
+                         change_type="N"):
+    base = {h: "" for h in _PAD_COUNCIL_HEADERS_CT}
+    base.update({"PDCode": pdcode, "RollNo": rollno, "ElectorSurname": surname,
+                 "ElectorForename": forename, "RegisteredAddress1": addr1,
+                 "RegisteredAddress2": addr2, "PostCode": postcode,
+                 "ChangeTypeID": change_type})
+    return base
+
+
+class TestChangeTypeID(unittest.TestCase):
+    """Tests for ChangeTypeID-aware suffix handling with --full-register."""
+
+    def _make_ref_row(self, prefix, number, suffix, surname="Test", forename="Test",
+                      addr1="Flat 1", addr2="High Road"):
+        row = _make_ttw_row(addr1, addr2, "NW10 3JU")
+        row["Elector No. Prefix"] = prefix
+        row["Elector No."] = number
+        row["Elector No. Suffix"] = suffix
+        row["Full Elector No."] = f"{prefix}-{number}-{suffix}" if suffix else f"{prefix}-{number}"
+        row["Surname"] = surname
+        row["Forename"] = forename
+        return row
+
+    def _run(self, update_rows, reference_rows):
+        update_path = _write_temp_csv(update_rows, _PAD_COUNCIL_HEADERS_CT)
+        ref_path = _write_temp_csv(reference_rows, _PAD_TTW_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        fd2, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd2)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      extra_args=["--full-register", ref_path],
+                                      report_file=report_path)
+            self.assertEqual(rc, 0, stderr)
+            headers, rows = read_output_csv(out_path)
+            report_text = Path(report_path).read_text(encoding="utf-8")
+            return headers, rows, report_text
+        finally:
+            for p in [update_path, ref_path, out_path, report_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_amend_gets_reference_suffix(self):
+        """A row with same prefix-number as reference gets the reference's suffix."""
+        ref = [self._make_ref_row("KG1", "100", "0", surname="Smith", forename="John")]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_delete_gets_reference_suffix(self):
+        """D row gets the reference's suffix."""
+        ref = [self._make_ref_row("KG1", "200", "1", surname="Jones", forename="Mary")]
+        update = [_make_council_row_ct("KG1", "200", "Jones", "Mary",
+                                        "Flat 2", "High Road", "NW10 3JU", "D")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+
+    def test_amend_multiple_ref_picks_best_by_name(self):
+        """A row with 2 ref candidates picks the one with matching name."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0", surname="Smith", forename="John",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("KG1", "100", "1", surname="Smith", forename="Jane",
+                               addr1="Flat 1", addr2="High Road"),
+        ]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "Jane",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+
+    def test_amend_name_change_uses_address(self):
+        """A row where name differs (being amended) but address matches."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0", surname="Smyth", forename="John",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("KG1", "100", "1", surname="Jones", forename="Mary",
+                               addr1="Flat 2", addr2="High Road"),
+        ]
+        # Amending "Smyth" to "Smith" — name doesn't match but address does
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_ad_no_reference_warns(self):
+        """A/D row with no matching reference → warn, suffix '0'."""
+        ref = [self._make_ref_row("KG1", "999", "0")]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, report = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+        self.assertIn("no reference entry", report.lower())
+
+    def test_new_row_skips_ad_suffix(self):
+        """N row doesn't get a suffix already assigned to an A/D row."""
+        ref = [self._make_ref_row("KG1", "100", "0", surname="Smith", forename="John")]
+        update = [
+            _make_council_row_ct("KG1", "100", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "100.5", "New", "Person",
+                                  "Flat 3", "High Road", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        amend_row = [r for r in rows if r["Surname"] == "Smith"][0]
+        new_row = [r for r in rows if r["Surname"] == "New"][0]
+        self.assertEqual(amend_row["Elector No. Suffix"], "0")
+        self.assertNotEqual(new_row["Elector No. Suffix"], "0")
+
+    def test_mixed_nad_batch(self):
+        """Batch with N, A, and D rows — all handled correctly."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0", surname="Smith", forename="John"),
+            self._make_ref_row("KG1", "200", "0", surname="Jones", forename="Mary"),
+        ]
+        update = [
+            _make_council_row_ct("KG1", "100", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "200", "Jones", "Mary",
+                                  "Flat 2", "High Road", "NW10 3JU", "D"),
+            _make_council_row_ct("KG1", "300", "New", "Voter",
+                                  "Flat 3", "High Road", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        amend = [r for r in rows if r["Surname"] == "Smith"][0]
+        delete = [r for r in rows if r["Surname"] == "Jones"][0]
+        new = [r for r in rows if r["Surname"] == "New"][0]
+        self.assertEqual(amend["Elector No. Suffix"], "0")
+        self.assertEqual(delete["Elector No. Suffix"], "0")
+        self.assertEqual(new["Elector No. Suffix"], "0")  # 300 has no ref, so suffix 0 is fine
+
+    def test_dedup_skips_ad_rows(self):
+        """A/D rows not reassigned by dedup even if they collide with N rows."""
+        ref = [self._make_ref_row("KG1", "100", "0", surname="Smith", forename="John")]
+        update = [
+            _make_council_row_ct("KG1", "100", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "100", "New", "Person",
+                                  "Flat 3", "High Road", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        amend = [r for r in rows if r["Surname"] == "Smith"][0]
+        new = [r for r in rows if r["Surname"] == "New"][0]
+        # A row keeps suffix 0 (from reference), N row gets a different suffix
+        self.assertEqual(amend["Elector No. Suffix"], "0")
+        self.assertNotEqual(new["Elector No. Suffix"], "0")
+
+    def test_no_change_type_unchanged(self):
+        """Without ChangeTypeID column, behaviour identical to current."""
+        ref = [self._make_ref_row("KG1", "100", "0")]
+        update = [_make_council_row("KG1", "100.5", "Test", "A",
+                                     "Flat 1", "High Road", "NW10 3JU")]
+        # Uses _make_council_row (no ChangeTypeID), NOT _make_council_row_ct
+        update_path = _write_temp_csv(update, _PAD_COUNCIL_HEADERS)
+        ref_path = _write_temp_csv(ref, _PAD_TTW_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      extra_args=["--full-register", ref_path])
+            self.assertEqual(rc, 0, stderr)
+            _, rows = read_output_csv(out_path)
+            # Without ChangeTypeID, decimal suffix logic runs as before
+            self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+        finally:
+            for p in [update_path, ref_path, out_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_case_insensitive_change_type(self):
+        """Lowercase 'a' works same as 'A'."""
+        ref = [self._make_ref_row("KG1", "100", "0", surname="Smith", forename="John")]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "a")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_integer_rollno_ad_rows(self):
+        """A/D rows with integer RollNos (the common case) matched correctly."""
+        ref = [self._make_ref_row("KG1", "500", "0", surname="Patel", forename="Priya")]
+        update = [_make_council_row_ct("KG1", "500", "Patel", "Priya",
+                                        "45 Chamberlayne Road", "", "NW10 3JU", "A")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+        self.assertEqual(rows[0]["Full Elector No."], "KG1-500-0")
+
+    def test_change_type_without_reference_exits(self):
+        """ChangeTypeID in input without --full-register should fail with clear error."""
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        update_path = _write_temp_csv(update, _PAD_COUNCIL_HEADERS_CT)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path)
+            self.assertNotEqual(rc, 0)
+            self.assertIn("--full-register", stderr)
+        finally:
+            for p in [update_path, out_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_multi_ward_update(self):
+        """Update contains rows from 3 different wards; each resolves independently."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0", surname="Patel", forename="Priya",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("BR1", "200", "0", surname="Okonkwo", forename="Chidi",
+                               addr1="12 Mora Road", addr2="Brondesbury"),
+            self._make_ref_row("QP1", "300", "0", surname="Murphy", forename="Siobhan",
+                               addr1="5 Station Road", addr2=""),
+        ]
+        update = [
+            _make_council_row_ct("KG1", "100", "Patel", "Priya",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("BR1", "200", "Okonkwo", "Chidi",
+                                  "12 Mora Road", "Brondesbury", "NW2 6TD", "D"),
+            _make_council_row_ct("QP1", "300.5", "Nguyen", "Linh",
+                                  "Flat 2", "Station Road", "HA0 4AX", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        patel = [r for r in rows if r["Surname"] == "Patel"][0]
+        okonkwo = [r for r in rows if r["Surname"] == "Okonkwo"][0]
+        nguyen = [r for r in rows if r["Surname"] == "Nguyen"][0]
+        self.assertEqual(patel["Elector No. Suffix"], "0")
+        self.assertEqual(okonkwo["Elector No. Suffix"], "0")
+        self.assertNotEqual(nguyen["Elector No. Suffix"], "0")
+
+    def test_diverse_names_matching(self):
+        """Names with apostrophes, hyphens, and multi-word surnames match correctly."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0", surname="O'Brien", forename="Sean",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("KG1", "100", "1", surname="O'Brien", forename="Shaun",
+                               addr1="Flat 1", addr2="High Road"),
+        ]
+        update = [_make_council_row_ct("KG1", "100", "O'Brien", "Sean",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_amend_and_delete_same_elector_number(self):
+        """A and D rows at same prefix-number, each matched to correct reference entry."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0", surname="Smith", forename="John",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("KG1", "100", "1", surname="Jones", forename="Mary",
+                               addr1="Flat 1", addr2="High Road"),
+        ]
+        update = [
+            _make_council_row_ct("KG1", "100", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "100", "Jones", "Mary",
+                                  "Flat 1", "High Road", "NW10 3JU", "D"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        smith = [r for r in rows if r["Surname"] == "Smith"][0]
+        jones = [r for r in rows if r["Surname"] == "Jones"][0]
+        self.assertEqual(smith["Elector No. Suffix"], "0")
+        self.assertEqual(jones["Elector No. Suffix"], "1")
+
+    def test_many_decimal_suffixes_skip_taken(self):
+        """5 new decimal rows with reference having suffixes 0, 1, 2 → assigned 3, 4, 5, 6, 7."""
+        ref = [
+            self._make_ref_row("KG1", "100", "0"),
+            self._make_ref_row("KG1", "100", "1"),
+            self._make_ref_row("KG1", "100", "2"),
+        ]
+        update = [
+            _make_council_row_ct("KG1", "100.1", "A", "Person", "F1", "Rd", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "100.2", "B", "Person", "F2", "Rd", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "100.3", "C", "Person", "F3", "Rd", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "100.5", "D", "Person", "F4", "Rd", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "100.75", "E", "Person", "F5", "Rd", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        suffixes = sorted([r["Elector No. Suffix"] for r in rows])
+        # Should get 3,4,5,6,7 (skipping 0,1,2 from reference)
+        self.assertEqual(suffixes, ["3", "4", "5", "6", "7"])
+
+    def test_large_rollno(self):
+        """Large RollNo values (9999) work correctly."""
+        ref = [self._make_ref_row("KG1", "9999", "0", surname="Test", forename="Person")]
+        update = [_make_council_row_ct("KG1", "9999.5", "New", "Person",
+                                        "Flat 1", "High Road", "NW10 3JU", "N")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No."], "9999")
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+
+    def test_unknown_change_type_treated_as_new(self):
+        """Unknown ChangeTypeID value treated as N (new)."""
+        ref = [self._make_ref_row("KG1", "100", "0")]
+        update = [_make_council_row_ct("KG1", "100.5", "New", "Person",
+                                        "Flat 1", "High Road", "NW10 3JU", "X")]
+        _, rows, _ = self._run(update, ref)
+        # Should be treated as N row, suffix should skip 0
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+
+    def test_hyphenated_surname_matching(self):
+        """Hyphenated surname matches correctly."""
+        ref = [self._make_ref_row("KG1", "100", "0", surname="Okonkwo-Smith",
+                                  forename="Ngozi", addr1="Flat 3", addr2="Chamberlayne Road")]
+        update = [_make_council_row_ct("KG1", "100", "Okonkwo-Smith", "Ngozi",
+                                        "Flat 3", "Chamberlayne Road", "NW10 3JU", "A")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    def test_realistic_mixed_batch(self):
+        """Realistic multi-ward batch with diverse names, mixed N/A/D, decimal and integer RollNos."""
+        ref = [
+            self._make_ref_row("KG1", "1416", "0", surname="Begum", forename="Fatima",
+                               addr1="Flat 3", addr2="45 Chamberlayne Road"),
+            self._make_ref_row("KG1", "1416", "1", surname="Begum", forename="Rashid",
+                               addr1="Flat 3", addr2="45 Chamberlayne Road"),
+            self._make_ref_row("HP1", "502", "0", surname="De Silva", forename="Kumara",
+                               addr1="22 Craven Park Road", addr2=""),
+            self._make_ref_row("HP1", "503", "0", surname="O'Connor", forename="Siobhan",
+                               addr1="24 Craven Park Road", addr2=""),
+        ]
+        update = [
+            # A: amending Fatima Begum's name spelling
+            _make_council_row_ct("KG1", "1416", "Begum", "Fatimah",
+                                  "Flat 3", "45 Chamberlayne Road", "NW10 3JU", "A"),
+            # D: deleting Rashid Begum (moved out)
+            _make_council_row_ct("KG1", "1416", "Begum", "Rashid",
+                                  "Flat 3", "45 Chamberlayne Road", "NW10 3JU", "D"),
+            # N: new person at same address
+            _make_council_row_ct("KG1", "1416.5", "Ahmed", "Yasmin",
+                                  "Flat 3", "45 Chamberlayne Road", "NW10 3JU", "N"),
+            # D: deleting O'Connor
+            _make_council_row_ct("HP1", "503", "O'Connor", "Siobhan",
+                                  "24 Craven Park Road", "", "NW10 4AB", "D"),
+            # N: new person in HP1
+            _make_council_row_ct("HP1", "600", "Nguyen", "Linh",
+                                  "Flat 1", "10 High Road Willesden", "NW10 2PB", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+
+        fatimah = [r for r in rows if r["Forename"] == "Fatimah"][0]
+        rashid = [r for r in rows if r["Forename"] == "Rashid"][0]
+        yasmin = [r for r in rows if r["Surname"] == "Ahmed"][0]
+        oconnor = [r for r in rows if r["Surname"] == "O'Connor"][0]
+        nguyen = [r for r in rows if r["Surname"] == "Nguyen"][0]
+
+        # Fatimah matched to ref suffix 0 (name+address, despite spelling change)
+        self.assertEqual(fatimah["Elector No. Suffix"], "0")
+        self.assertEqual(fatimah["Elector No. Prefix"], "KG1")
+        # Rashid matched to ref suffix 1
+        self.assertEqual(rashid["Elector No. Suffix"], "1")
+        # Yasmin is new, skips 0 and 1 (taken by A/D rows)
+        self.assertEqual(yasmin["Elector No. Suffix"], "2")
+        self.assertEqual(yasmin["Elector No."], "1416")
+        # O'Connor matched to ref
+        self.assertEqual(oconnor["Elector No. Suffix"], "0")
+        self.assertEqual(oconnor["Elector No. Prefix"], "HP1")
+        # Nguyen is new, no ref collision at HP1-600
+        self.assertEqual(nguyen["Elector No. Suffix"], "0")
 
 
 # ---------------------------------------------------------------------------

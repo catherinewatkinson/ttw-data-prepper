@@ -983,8 +983,8 @@ def generate_election_columns(row, base_idx, er_match, ce_match,
             pv = _get_postal_voter(er_match)
             if not pv:
                 pv = er_match.get("P/PB", "").strip()
-            # Treat explicit "N"/"No" as blank (no postal vote)
-            if pv and pv.upper() not in ("N", "NO"):
+            # Treat explicit "N"/"No"/"False" as blank (no postal vote)
+            if pv and pv.upper() not in ("N", "NO", "FALSE"):
                 postal = "Y"
                 report.questions_data["PostalVoter"] = True
 

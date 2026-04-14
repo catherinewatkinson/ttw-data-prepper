@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from ttw_common import (read_input, write_output, normalize_postcode,
                         UK_POSTCODE_RE, VALID_PARTY_CODES,
                         PARTY_NAME_MAP, PARTY_BLANK_VALUES, map_party_name)
+from enrich_register import _surname_forename_similarity, _address_similarity
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -168,6 +169,10 @@ def resolve_aliases(headers, quiet=False):
 
 
 # Council-only columns (preserved by default, stripped with --strip-extra)
+# Columns always preserved in output regardless of --strip-extra
+# (e.g. ChangeTypeID from electoral updates data)
+ALWAYS_PRESERVE_COLUMNS = ["ChangeTypeID"]
+
 COUNCIL_ONLY_COLUMNS = [
     "ElectorTitle", "IERStatus", "FranchiseMarker",
     "Euro", "Parl", "County", "Ward",
@@ -238,6 +243,7 @@ class QAReport:
         self.warnings = []        # [(row, field, value, issue)]
         self.fixes = []           # [(row, field, old_value, new_value, issue)]
         self.info = []            # [str]
+        self.critical_warnings = []  # [str] — shown at top of report
         self.unrecognized_columns = []  # [col_name]
         self.alias_log = []  # [(original_name, canonical_name)]
         self.strip_extra = False
@@ -254,6 +260,15 @@ class QAReport:
         lines.append(f"Mode: {self.mode}")
         lines.append(f"Suffix mode: {self.suffix_mode}")
         lines.append("")
+
+        # Critical warnings first (e.g. A/D collisions)
+        if self.critical_warnings:
+            lines.append("!" * 50)
+            lines.append("CRITICAL — MANUAL REVIEW REQUIRED")
+            lines.append("!" * 50)
+            for cw in self.critical_warnings:
+                lines.append(f"  {cw}")
+            lines.append("")
 
         lines.append("--- Summary ---")
         lines.append(f"Total input rows: {self.total_input}")
@@ -424,37 +439,178 @@ def map_row(council_row):
 # Suffix computation
 # ---------------------------------------------------------------------------
 
-def compute_suffixes(rows, council_rows=None, report=None):
+def _match_ad_to_reference(rows, reference_entries, report):
+    """Match A/D rows to reference entries by (prefix, number) + name/address scoring.
+    Assigns Elector No. Suffix directly. Returns set of row indices that were processed."""
+    ad_indices = set()
+
+    for i, row in enumerate(rows):
+        change_type = row.get("ChangeTypeID", "").strip().upper()
+        if change_type not in ("A", "D"):
+            continue
+        ad_indices.add(i)
+
+        prefix = row.get("Elector No. Prefix", "").strip()
+        raw_number = row.get("Elector No.", "").strip()
+
+        # Normalize decimal RollNo to integer part for reference lookup
+        if "." in raw_number:
+            int_part = raw_number[:raw_number.index(".")]
+            row["Elector No."] = int_part
+            if report:
+                report.fixes.append((i + 2, "Elector No.", raw_number, int_part,
+                                     "decimal RollNo normalized to integer"))
+            number = int_part
+        else:
+            number = raw_number
+
+        key = (prefix, number)
+        candidates = reference_entries.get(key, [])
+
+        update_name = f"{row.get('Forename', '')} {row.get('Surname', '')}".strip()
+        update_addr = " ".join(
+            row.get(f"Address{j}", "").strip() for j in range(1, 5)
+        ).strip()
+
+        if not candidates:
+            # No reference entry — warn and assign suffix "0"
+            row["Elector No. Suffix"] = "0"
+            if report:
+                report.warnings.append(
+                    (i + 2, "Elector No.", "",
+                     f"ChangeTypeID={change_type}: no reference entry for "
+                     f"{prefix}-{number} ({update_name}), assigned suffix '0'"))
+            continue
+
+        if len(candidates) == 1:
+            # Single match — use directly
+            row["Elector No. Suffix"] = candidates[0]["suffix"]
+            if report:
+                report.fixes.append(
+                    (i + 2, "Elector No. Suffix", "", candidates[0]["suffix"],
+                     f"matched to reference ({change_type})"))
+            continue
+
+        # Multiple candidates — score by name + address similarity
+        best_score = -1
+        best_entry = None
+        for entry in candidates:
+            name_sim = _surname_forename_similarity(
+                row.get("Surname", ""), row.get("Forename", ""),
+                entry["surname"], entry["forename"])
+            addr_sim = _address_similarity(update_addr, entry["addr"])
+            score = 0.5 * name_sim + 0.5 * addr_sim
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+
+        row["Elector No. Suffix"] = best_entry["suffix"]
+        ref_name = f"{best_entry['forename']} {best_entry['surname']}".strip()
+
+        if report:
+            report.fixes.append(
+                (i + 2, "Elector No. Suffix", "", best_entry["suffix"],
+                 f"matched to reference ({change_type}, score={best_score:.2f}, "
+                 f"ref='{ref_name}')"))
+            if best_score < 0.4:
+                report.warnings.append(
+                    (i + 2, "Elector No.", "",
+                     f"Low confidence match ({change_type}): "
+                     f"'{update_name}' -> '{ref_name}' "
+                     f"(score={best_score:.2f}, suffix={best_entry['suffix']})"))
+
+    return ad_indices
+
+
+def compute_suffixes(rows, council_rows=None, report=None,
+                     reference_suffixes=None, reference_entries=None):
     """Compute Elector No. Suffix for each row.
 
-    Auto-detects the appropriate method:
-    1. Any decimal RollNos (e.g. 3.5) → normalize groups containing decimals:
-       split into integer Elector No. + sequential suffix (0, 1, 2...).
-       Groups with only integer RollNos keep their existing Suffix column
-       values (or "0" if no Suffix column).
-    2. All integer RollNos + Suffix column with data → use Suffix values as-is
-    3. All integer RollNos + no Suffix column → assign "0" to all
+    If ChangeTypeID is present and reference data available:
+    - Phase 1: A/D rows matched to reference (suffix from reference)
+    - Phase 2: N rows get unique suffixes (skip reference + A/D taken)
+
+    Otherwise (no ChangeTypeID):
+    - Auto-detects method: decimal RollNos, Suffix column, or default "0"
+
+    reference_suffixes: dict[(prefix, number)] -> set(suffix_strings) for N-row logic
+    reference_entries: dict[(prefix, number)] -> list of {suffix, surname, forename, addr} for A/D matching
     """
-    has_decimals = any("." in row.get("Elector No.", "") for row in rows)
-    has_suffix_col = (council_rows is not None
-                      and any((cr.get("Suffix") or "").strip()
-                              for cr in council_rows))
+    has_change_type = any(row.get("ChangeTypeID", "").strip() for row in rows)
 
-    if has_decimals:
-        _normalize_suffixes(rows, council_rows, report)
-    elif has_suffix_col:
-        for row, council_row in zip(rows, council_rows):
-            suffix = (council_row.get("Suffix") or "").strip()
-            row["Elector No. Suffix"] = suffix if suffix else ""
+    if has_change_type and reference_entries is None:
+        print("ERROR: ChangeTypeID column detected in input but --full-register not provided.\n"
+              "Electoral updates require a reference register to match A/D rows correctly.\n"
+              "Download the full register from TTW (Data Export) and pass it with:\n"
+              "  --full-register ttw_app_export.csv",
+              file=sys.stderr)
+        sys.exit(1)
+
+    if has_change_type and reference_entries is not None:
+        # --- Phase 1: A/D rows — match to reference ---
+        ad_indices = _match_ad_to_reference(rows, reference_entries, report)
+
+        # Build augmented taken set: reference suffixes + A/D assignments
+        augmented_ref = defaultdict(set)
+        if reference_suffixes:
+            for key, suffixes in reference_suffixes.items():
+                augmented_ref[key] = set(suffixes)
+        for i in ad_indices:
+            prefix = rows[i].get("Elector No. Prefix", "").strip()
+            number = rows[i].get("Elector No.", "").strip()
+            suffix = rows[i].get("Elector No. Suffix", "").strip()
+            if prefix and number and suffix:
+                augmented_ref[(prefix, number)].add(suffix)
+        augmented_ref = dict(augmented_ref)
+
+        # --- Phase 2: N rows — assign unique suffixes ---
+        # Filter to N rows only for the standard suffix logic
+        n_indices = set(range(len(rows))) - ad_indices
+
+        has_decimals = any(
+            "." in rows[i].get("Elector No.", "")
+            for i in n_indices)
+        has_suffix_col = (council_rows is not None
+                          and any((council_rows[i].get("Suffix") or "").strip()
+                                  for i in n_indices if i < len(council_rows)))
+
+        if has_decimals:
+            _normalize_suffixes(rows, council_rows, report, augmented_ref,
+                                row_filter=n_indices)
+        elif has_suffix_col:
+            for i in n_indices:
+                if i < len(council_rows):
+                    suffix = (council_rows[i].get("Suffix") or "").strip()
+                    rows[i]["Elector No. Suffix"] = suffix if suffix else ""
+        else:
+            for i in n_indices:
+                rows[i]["Elector No. Suffix"] = "0"
+
+        _build_full_elector_no(rows)
+        _dedup_full_elector_no(rows, report, skip_indices=ad_indices)
+        if reference_suffixes:
+            _check_reference_clashes(rows, reference_suffixes, report)
     else:
-        for row in rows:
-            row["Elector No. Suffix"] = "0"
+        # --- No ChangeTypeID: existing behaviour unchanged ---
+        has_decimals = any("." in row.get("Elector No.", "") for row in rows)
+        has_suffix_col = (council_rows is not None
+                          and any((cr.get("Suffix") or "").strip()
+                                  for cr in council_rows))
 
-    # Build Full Elector No.
-    _build_full_elector_no(rows)
+        if has_decimals:
+            _normalize_suffixes(rows, council_rows, report, reference_suffixes)
+        elif has_suffix_col:
+            for row, council_row in zip(rows, council_rows):
+                suffix = (council_row.get("Suffix") or "").strip()
+                row["Elector No. Suffix"] = suffix if suffix else ""
+        else:
+            for row in rows:
+                row["Elector No. Suffix"] = "0"
 
-    # Dedup pass: if any Full Elector No. collisions remain, reassign suffixes
-    _dedup_full_elector_no(rows, report)
+        _build_full_elector_no(rows)
+        _dedup_full_elector_no(rows, report)
+        if reference_suffixes:
+            _check_reference_clashes(rows, reference_suffixes, report)
 
 
 def _build_full_elector_no(rows):
@@ -469,8 +625,10 @@ def _build_full_elector_no(rows):
             row["Full Elector No."] = f"{prefix}-{number}"
 
 
-def _dedup_full_elector_no(rows, report):
-    """Resolve duplicate Full Elector No. by reassigning suffixes sequentially."""
+def _dedup_full_elector_no(rows, report, skip_indices=None):
+    """Resolve duplicate Full Elector No. by reassigning suffixes sequentially.
+    Rows in skip_indices (e.g. A/D rows) are never reassigned."""
+    skip = skip_indices or set()
     fen_groups = defaultdict(list)
     for i, row in enumerate(rows):
         fen = row.get("Full Elector No.", "")
@@ -479,10 +637,32 @@ def _dedup_full_elector_no(rows, report):
     for fen, indices in fen_groups.items():
         if len(indices) < 2:
             continue
-        # Reassign suffixes 0, 1, 2... for the collision group
-        for pos, idx in enumerate(indices):
+        # Only reassign non-skipped rows in the collision group
+        reassignable = [idx for idx in indices if idx not in skip]
+        skipped_in_group = [idx for idx in indices if idx in skip]
+        if not reassignable:
+            # All colliding rows are A/D — warn about unresolvable collision
+            if len(skipped_in_group) > 1 and report:
+                details = []
+                for idx in skipped_in_group:
+                    r = rows[idx]
+                    ct = r.get("ChangeTypeID", "").strip()
+                    name = f"{r.get('Forename', '')} {r.get('Surname', '')}".strip()
+                    addr = f"{r.get('Address1', '')} {r.get('Address2', '')}".strip()
+                    details.append(f"Row {idx + 2}: {ct} '{name}' at '{addr}'")
+                detail_str = "; ".join(details)
+                report.critical_warnings.append(
+                    f"COLLISION: Multiple A/D rows share Full Elector No. '{fen}' — "
+                    f"cannot auto-resolve. Manual review needed. {detail_str}")
+            continue
+        # Find taken suffixes from skipped rows in this group
+        taken = {rows[idx].get("Elector No. Suffix", "") for idx in indices if idx in skip}
+        next_s = 0
+        for idx in reassignable:
+            while str(next_s) in taken:
+                next_s += 1
             row = rows[idx]
-            new_suffix = str(pos)
+            new_suffix = str(next_s)
             old_suffix = row.get("Elector No. Suffix", "")
             if new_suffix != old_suffix:
                 row["Elector No. Suffix"] = new_suffix
@@ -490,8 +670,10 @@ def _dedup_full_elector_no(rows, report):
                     report.fixes.append((idx + 2, "Elector No. Suffix",
                         old_suffix, new_suffix,
                         f"auto-assigned to resolve duplicate {fen}"))
-        # Rebuild Full Elector No. for affected rows
-        for idx in indices:
+            taken.add(new_suffix)
+            next_s += 1
+        # Rebuild Full Elector No. for reassigned rows
+        for idx in reassignable:
             row = rows[idx]
             prefix = row.get("Elector No. Prefix", "")
             number = row.get("Elector No.", "")
@@ -502,17 +684,23 @@ def _dedup_full_elector_no(rows, report):
                 row["Full Elector No."] = f"{prefix}-{number}"
 
 
-def _normalize_suffixes(rows, council_rows, report):
+def _normalize_suffixes(rows, council_rows, report, reference_suffixes=None,
+                        row_filter=None):
     """Normalize decimal RollNo values to integer Elector No. + sequential suffix.
 
     Only groups containing at least one decimal RollNo are renumbered.
     Groups with only integer RollNos keep their existing Suffix column
     values (or "0" if no Suffix column).
 
+    If row_filter is provided (set of indices), only those rows are processed.
+
     Within a renumbered group:
     - Sorts by fractional value ascending
-    - Assigns suffix: "0" for primary, "1", "2", "3"... for rest
+    - Assigns suffix starting after any already-taken suffixes in the reference
     - Updates Elector No. to integer part
+
+    If reference_suffixes is provided, suffix assignment skips values already
+    present in the reference to avoid clashes.
     """
     has_suffix_col = (council_rows is not None
                       and any((cr.get("Suffix") or "").strip()
@@ -521,6 +709,8 @@ def _normalize_suffixes(rows, council_rows, report):
     # Parse each row and group by (prefix, integer_rollno)
     groups = defaultdict(list)
     for i, row in enumerate(rows):
+        if row_filter is not None and i not in row_filter:
+            continue
         prefix = row.get("Elector No. Prefix", "")
         elector_no = row.get("Elector No.", "")
 
@@ -554,11 +744,21 @@ def _normalize_suffixes(rows, council_rows, report):
                     rows[idx]["Elector No. Suffix"] = "0"
             continue
 
-        # Sort by fractional value ascending and renumber
+        # Determine which suffixes are already taken in the reference
+        taken_suffixes = set()
+        if reference_suffixes:
+            taken_suffixes = reference_suffixes.get((prefix, int_part), set())
+
+        # Sort by fractional value ascending and assign next available suffixes
         members.sort(key=lambda x: x[1])
 
-        for pos, (idx, frac_val, orig_elector_no, clean_no, _) in enumerate(members):
-            new_suffix = str(pos)
+        next_suffix = 0
+        for idx, frac_val, orig_elector_no, clean_no, _ in members:
+            # Skip suffix values already taken by the reference
+            while str(next_suffix) in taken_suffixes:
+                next_suffix += 1
+
+            new_suffix = str(next_suffix)
             rows[idx]["Elector No. Suffix"] = new_suffix
 
             # Update Elector No. to integer part if it was decimal
@@ -568,9 +768,53 @@ def _normalize_suffixes(rows, council_rows, report):
                         clean_no, "decimal RollNo normalized to integer"))
                 rows[idx]["Elector No."] = clean_no
 
-            if report and pos > 0:
+            if report and new_suffix != "0":
                 report.fixes.append((idx + 2, "Elector No. Suffix", "",
                     new_suffix, "suffix normalized (fractional -> sequential)"))
+
+            next_suffix += 1
+
+
+def _check_reference_clashes(rows, reference_suffixes, report):
+    """Check for Full Elector No. clashes between output and reference register.
+    Automatically resolves by reassigning to next available suffix."""
+    clashes_fixed = 0
+    for i, row in enumerate(rows):
+        # Skip A/D rows — they deliberately match the reference
+        change_type = row.get("ChangeTypeID", "").strip().upper()
+        if change_type in ("A", "D"):
+            continue
+        prefix = row.get("Elector No. Prefix", "").strip()
+        number = row.get("Elector No.", "").strip()
+        suffix = row.get("Elector No. Suffix", "").strip()
+        key = (prefix, number)
+
+        if key not in reference_suffixes:
+            continue
+
+        taken = reference_suffixes[key]
+        if suffix in taken:
+            # Find next available suffix (check both reference and other update rows)
+            next_s = 0
+            all_taken = taken | {r.get("Elector No. Suffix", "").strip()
+                                  for r in rows
+                                  if r.get("Elector No. Prefix", "").strip() == prefix
+                                  and r.get("Elector No.", "").strip() == number}
+            while str(next_s) in all_taken:
+                next_s += 1
+            new_suffix = str(next_s)
+            old_suffix = suffix
+            row["Elector No. Suffix"] = new_suffix
+            row["Full Elector No."] = f"{prefix}-{number}-{new_suffix}"
+            clashes_fixed += 1
+            if report:
+                report.fixes.append((i + 2, "Elector No. Suffix", old_suffix,
+                    new_suffix, f"suffix reassigned to avoid clash with reference register"))
+
+    if clashes_fixed and report:
+        report.warnings.append(
+            (0, "Elector No.", "",
+             f"{clashes_fixed} suffix(es) reassigned to avoid clashes with reference register"))
 
 
 # ---------------------------------------------------------------------------
@@ -931,15 +1175,141 @@ def reformat_addresses(row, row_num, report):
     # Note: bracket notation (e.g. "[100-102]") is valid per UG C3 slide 10 — no warning needed.
 
 
-def zero_pad_flat_numbers(rows, report):
+_FLAT_RE = re.compile(r"^((?:Flat|Unit|Apt|Room|Studio)\s+)(\d+)([A-Za-z]?)$", re.IGNORECASE)
+_BUILDING_NUM_RE = re.compile(r"^(.+\S)\s+(\d+)([A-Za-z]?)$")
+
+
+def _compute_flat_widths(rows):
+    """Compute max flat-number widths grouped by (Address2, PostCode).
+    Returns dict[(addr2, postcode)] -> max_numeric_width."""
+    groups = defaultdict(list)
+    for row in rows:
+        addr1 = row.get("Address1", "")
+        addr2 = row.get("Address2", "")
+        postcode = row.get("PostCode", "")
+        if not addr2:
+            continue
+        m = _FLAT_RE.match(addr1)
+        if m:
+            groups[(addr2, postcode)].append(len(m.group(2)))
+    return {key: max(widths) for key, widths in groups.items()}
+
+
+def _compute_building_widths(rows):
+    """Compute max building-number widths grouped by (building_name, postcode).
+    Returns dict[(building_name, postcode)] -> max_numeric_width."""
+    groups = defaultdict(list)
+    for row in rows:
+        addr1 = row.get("Address1", "")
+        postcode = row.get("PostCode", "")
+        if UNIT_PREFIXES_RE.match(addr1):
+            continue
+        m = _BUILDING_NUM_RE.match(addr1)
+        if m and any(c.isalpha() for c in m.group(1)):
+            building_name = m.group(1)
+            groups[(building_name, postcode)].append(len(m.group(2)))
+    return {key: max(widths) for key, widths in groups.items()}
+
+
+def _parse_voter_number(voter_number):
+    """Parse a TTW Voter Number (e.g. 'KG1-1-0', 'KG1-1') into (prefix, number, suffix)."""
+    parts = voter_number.split("-")
+    if len(parts) >= 3:
+        return parts[0], parts[1], parts[2]
+    elif len(parts) == 2:
+        return parts[0], parts[1], "0"
+    return "", "", ""
+
+
+def build_padding_reference(reference_path):
+    """Read a reference CSV (TTW app-export or cleaned register) and compute
+    padding widths + suffix data.
+
+    Auto-detects format:
+    - TTW app-export: 'Voter Number', 'First Name', 'Surname', 'House Name/Number/Road'
+    - Cleaned register: 'Elector No. Prefix', 'Elector No.', 'Elector No. Suffix',
+      'Forename', 'Surname', 'Address1'-'Address4'
+
+    Returns (flat_widths, building_widths, suffix_taken, suffix_entries) where:
+    - suffix_taken: dict[(prefix, number)] -> set of existing suffix strings
+    - suffix_entries: dict[(prefix, number)] -> list of {suffix, surname, forename, addr}
+    """
+    rows, _, headers = read_input(reference_path)
+    header_set = set(headers)
+
+    # Detect format
+    is_app_export = "Voter Number" in header_set
+    is_cleaned = "Elector No. Prefix" in header_set
+
+    if is_app_export:
+        # Remap TTW app-export columns to cleaned-register equivalents for padding
+        # Build Address1/Address2 from House Name/Number/Road for padding functions
+        for row in rows:
+            house_name = row.get("House Name", "").strip()
+            house_num = row.get("House Number", "").strip()
+            road = row.get("Road", "").strip()
+            # Build Address1: flat/building info, Address2: road
+            if house_name and house_num:
+                row["Address1"] = f"{house_name} {house_num}"
+                row["Address2"] = road
+            elif house_name:
+                row["Address1"] = house_name
+                row["Address2"] = road
+            elif house_num:
+                row["Address1"] = house_num
+                row["Address2"] = road
+            else:
+                row["Address1"] = road
+                row["Address2"] = ""
+            # Normalize PostCode column name
+            if "Post Code" in row and "PostCode" not in row:
+                row["PostCode"] = row["Post Code"]
+
+    flat_w = _compute_flat_widths(rows)
+    building_w = _compute_building_widths(rows)
+
+    suffix_taken = defaultdict(set)
+    suffix_entries = defaultdict(list)
+
+    for row in rows:
+        if is_app_export:
+            voter_num = row.get("Voter Number", "").strip()
+            prefix, number, suffix = _parse_voter_number(voter_num)
+            surname = row.get("Surname", "").strip()
+            forename = row.get("First Name", "").strip()
+            addr_parts = [row.get("House Name", "").strip(),
+                          row.get("House Number", "").strip(),
+                          row.get("Road", "").strip()]
+        else:
+            prefix = row.get("Elector No. Prefix", "").strip()
+            number = row.get("Elector No.", "").strip()
+            suffix = row.get("Elector No. Suffix", "").strip() or "0"
+            surname = row.get("Surname", "").strip()
+            forename = row.get("Forename", "").strip()
+            addr_parts = [row.get(f"Address{i}", "").strip() for i in range(1, 5)]
+
+        if prefix and number:
+            suffix_taken[(prefix, number)].add(suffix)
+            suffix_entries[(prefix, number)].append({
+                "suffix": suffix,
+                "surname": surname,
+                "forename": forename,
+                "addr": " ".join(p for p in addr_parts if p),
+            })
+
+    return flat_w, building_w, dict(suffix_taken), dict(suffix_entries)
+
+
+def zero_pad_flat_numbers(rows, report, reference_widths=None):
     """Zero-pad flat numbers for consistent sort order within each building.
 
     Groups rows by (Address2, PostCode). Within each group, pads numeric
     flat IDs to the maximum width found (e.g. Flat 1 -> Flat 01 if max is 12).
+    If reference_widths is provided, uses max(reference, group) for width.
     """
-    flat_re = re.compile(r"^((?:Flat|Unit|Apt|Room|Studio)\s+)(\d+)([A-Za-z]?)$", re.IGNORECASE)
+    group_widths = _compute_flat_widths(rows)
 
-    # Build groups: (Address2, PostCode) -> [(index, match)]
+    # Build groups with match objects for padding
     groups = defaultdict(list)
     for i, row in enumerate(rows):
         addr1 = row.get("Address1", "")
@@ -947,58 +1317,61 @@ def zero_pad_flat_numbers(rows, report):
         postcode = row.get("PostCode", "")
         if not addr2:
             continue
-        m = flat_re.match(addr1)
+        m = _FLAT_RE.match(addr1)
         if m:
             groups[(addr2, postcode)].append((i, m))
 
     for key, members in groups.items():
-        max_width = max(len(m.group(2)) for _, m in members)
-        if max_width <= 1:
+        own_width = group_widths.get(key, 0)
+        ref_width = reference_widths.get(key, 0) if reference_widths else 0
+        effective_width = max(own_width, ref_width)
+        if effective_width <= 1:
             continue
         for idx, m in members:
             num_str = m.group(2)
-            if len(num_str) < max_width:
+            if len(num_str) < effective_width:
                 old_addr1 = rows[idx]["Address1"]
-                padded = num_str.zfill(max_width)
+                padded = num_str.zfill(effective_width)
                 new_addr1 = f"{m.group(1)}{padded}{m.group(3)}"
                 rows[idx]["Address1"] = new_addr1
                 report.fixes.append((idx + 2, "Address1", old_addr1, new_addr1,
                     "flat number zero-padded for sort order"))
 
 
-def zero_pad_building_numbers(rows, report):
+def zero_pad_building_numbers(rows, report, reference_widths=None):
     """Zero-pad building numbers for consistent sort order within each building.
 
     Groups rows by (building_name, PostCode). Within each group, pads numeric
     building IDs to the maximum width found (e.g. Sheil Court 3 -> Sheil Court 03
-    if max is 14).
+    if max is 14). If reference_widths is provided, uses max(reference, group).
 
     Only applies to trailing numbers in Address1 (e.g. "Sheil Court 10").
     Flat/Unit/Apt/Room/Studio patterns are skipped (handled by zero_pad_flat_numbers).
     """
-    building_num_re = re.compile(r"^(.+\S)\s+(\d+)([A-Za-z]?)$")
+    group_widths = _compute_building_widths(rows)
 
-    groups = defaultdict(list)  # (building_name, postcode) -> [(index, match)]
+    groups = defaultdict(list)
     for i, row in enumerate(rows):
         addr1 = row.get("Address1", "")
         postcode = row.get("PostCode", "")
-        # Skip flat/unit patterns (already handled by zero_pad_flat_numbers)
         if UNIT_PREFIXES_RE.match(addr1):
             continue
-        m = building_num_re.match(addr1)
+        m = _BUILDING_NUM_RE.match(addr1)
         if m and any(c.isalpha() for c in m.group(1)):
             building_name = m.group(1)
             groups[(building_name, postcode)].append((i, m))
 
     for key, members in groups.items():
-        max_width = max(len(m.group(2)) for _, m in members)
-        if max_width <= 1:
+        own_width = group_widths.get(key, 0)
+        ref_width = reference_widths.get(key, 0) if reference_widths else 0
+        effective_width = max(own_width, ref_width)
+        if effective_width <= 1:
             continue
         for idx, m in members:
             num_str = m.group(2)
-            if len(num_str) < max_width:
+            if len(num_str) < effective_width:
                 old_addr1 = rows[idx]["Address1"]
-                padded = num_str.zfill(max_width)
+                padded = num_str.zfill(effective_width)
                 new_addr1 = f"{m.group(1)} {padded}{m.group(3)}"
                 rows[idx]["Address1"] = new_addr1
                 report.fixes.append((idx + 2, "Address1", old_addr1, new_addr1,
@@ -1181,9 +1554,15 @@ def build_output_headers(rows, elections, election_types, has_date_data=False,
             elif election_type == "future":
                 headers.append(f"{election_name} Postal Voter")
 
+    # Always preserve ALWAYS_PRESERVE_COLUMNS if present in input
+    header_set = set(headers)
+    for col in ALWAYS_PRESERVE_COLUMNS:
+        if col in set(input_headers or []) and col not in header_set:
+            headers.append(col)
+            header_set.add(col)
+
     # Append extra input columns to output (unless --strip-extra)
     if not strip_extra:
-        header_set = set(headers)
         input_set = set(input_headers or [])
         exclude = set(FIELD_MAP.keys())
         # Exclude TTW-named columns only when their mapped source is present
@@ -1195,6 +1574,7 @@ def build_output_headers(rows, elections, election_types, has_date_data=False,
         for col in (input_headers or []):
             if col and col not in header_set and col not in exclude:
                 headers.append(col)
+                header_set.add(col)
 
     # Optionally remove entirely-empty optional columns
     removed = []
@@ -1235,6 +1615,11 @@ def main():
     parser.add_argument("--strip-extra", action="store_true",
                         help="Remove non-TTW columns from output. By default, all "
                              "input columns are preserved in the output.")
+    parser.add_argument("--full-register", default=None,
+                        help="Full register CSV for reference (TTW app-export or previously "
+                             "cleaned register). Required when processing electoral updates "
+                             "(ChangeTypeID column). Provides zero-padding widths and suffix "
+                             "matching for A/D rows.")
     parser.add_argument("--quiet", action="store_true", help="Suppress stdout progress")
     parser.add_argument("--no-aliases", action="store_true",
                         help="Disable automatic column name alias resolution")
@@ -1305,7 +1690,7 @@ def main():
 
     # --- Check for unrecognized input columns ---
     known_columns = (set(FIELD_MAP.keys()) | set(COUNCIL_ONLY_COLUMNS)
-                     | {"Suffix"})
+                     | set(ALWAYS_PRESERVE_COLUMNS) | {"Suffix"})
     if args.enriched_columns:
         known_columns |= set(ENRICHMENT_EXTRA_COLUMNS)
         known_columns |= set(ENRICHMENT_DISCARD_COLUMNS)
@@ -1367,14 +1752,24 @@ def main():
     for i, row in enumerate(mapped_rows):
         reformat_addresses(row, i + 2, report)
 
-    # --- Step 6.7: Zero-pad flat numbers ---
-    zero_pad_flat_numbers(mapped_rows, report)
+    # --- Step 6.7-6.8: Zero-pad flat and building numbers ---
+    flat_ref_widths = None
+    building_ref_widths = None
+    ref_suffix_data = None
+    ref_suffix_entries = None
+    if args.full_register:
+        if not args.quiet:
+            print(f"Reading full register reference: {args.full_register}")
+        flat_ref_widths, building_ref_widths, ref_suffix_data, ref_suffix_entries = \
+            build_padding_reference(args.full_register)
 
-    # --- Step 6.8: Zero-pad building numbers ---
-    zero_pad_building_numbers(mapped_rows, report)
+    zero_pad_flat_numbers(mapped_rows, report, reference_widths=flat_ref_widths)
+    zero_pad_building_numbers(mapped_rows, report, reference_widths=building_ref_widths)
 
     # --- Step 7: Compute suffix ---
-    compute_suffixes(mapped_rows, council_rows, report=report)
+    compute_suffixes(mapped_rows, council_rows, report=report,
+                     reference_suffixes=ref_suffix_data,
+                     reference_entries=ref_suffix_entries)
 
     # --- Step 8: Normalize dates ---
     has_date_data = False
