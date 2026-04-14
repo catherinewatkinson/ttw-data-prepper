@@ -139,7 +139,12 @@ def compute_ward_stats(df, ward_map):
     df = df[~unmapped].copy()
 
     # Build door key
-    for col in ["Post Code", "House Name", "House Number", "Road"]:
+    address_cols = ["Post Code", "House Name", "House Number", "Road"]
+    missing_addr = [col for col in address_cols if col not in df.columns]
+    if missing_addr:
+        print(f"  WARNING: Address columns missing from CSV: {missing_addr}")
+        print(f"  Door counts will be unreliable — ensure the full unredacted export is used.")
+    for col in address_cols:
         if col not in df.columns:
             df[col] = ""
     df["_door"] = (df["Post Code"].fillna("").str.strip() + "|" +

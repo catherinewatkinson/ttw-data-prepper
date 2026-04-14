@@ -13,3 +13,7 @@ __pycache__/
 
 # Working files
 IMPLEMENTATION_PLAN.md
+
+# Ward statistics output (keep locally, not in repo)
+analysis-app/ward-statistics/snapshots/
+analysis-app/ward-statistics/report.html
