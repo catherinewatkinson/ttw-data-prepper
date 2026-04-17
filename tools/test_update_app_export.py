@@ -1210,8 +1210,12 @@ class TestPerfectScoreAutoResolve(unittest.TestCase):
                 "Post Code": "NW10 3JU", "Voter UUID": "uuid-priyanka",
             }),
         ]
+        # Use a PDCode+RollNo that matches NEITHER candidate's Voter Number,
+        # so the voter-number tiebreaker falls through and the perfect-score
+        # branch is exercised directly.
         cls.reg_rows = [
             make_register_row(
+                PDCode="ZZ9", RollNo="999",
                 ElectorSurname="Patel", ElectorForename="Priya",
                 PostCode="NW10 3JU", Party="G", **{"1-5": "1"}),
         ]
@@ -1277,6 +1281,204 @@ class TestPerfectScoreAutoResolve(unittest.TestCase):
         self.assertIn("uuid-priyanka", reason)  # runner-up UUID
 
 
+class TestVoterNumberAutoResolve(unittest.TestCase):
+    """When an ambiguous match is resolved by the elector number (PDCode+RollNo)
+    tiebreaker, the winner gets the data applied, runner-ups appear in
+    --changed-only output, and the register row is logged to rejects2check with
+    the 'Auto-resolved via elector number match' prefix for spot-checking."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Two similar-named candidates at same postcode with ambiguous name
+        # scores (both forenames start with "Priya"). The register row has
+        # PDCode+RollNo matching ONLY the second candidate's Voter Number,
+        # so voter-number tiebreaker must pick the second candidate.
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-1", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU", "Voter UUID": "uuid-priya",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-2", "First Name": "Priyanka", "Surname": "Patel",
+                "Post Code": "NW10 3JU", "Voter UUID": "uuid-priyanka",
+            }),
+        ]
+        # Register row is for Priyanka (PDCode KG1, RollNo 2 → "KG1-2").
+        # But name score best-matches "Priya" (1.0) with Priyanka slightly lower,
+        # making the situation ambiguous — voter-number tiebreaker picks Priyanka.
+        cls.reg_rows = [
+            make_register_row(
+                PDCode="KG1", RollNo="2",
+                ElectorSurname="Patel", ElectorForename="Priyanka",
+                PostCode="NW10 3JU", Party="G", **{"1-5": "1"}),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.report_path = cls.out_path + ".report.txt"
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        cls.rc, _, cls.stderr = run_update(
+            cls.app_path, cls.reg_path, cls.out_path,
+            extra_args=["--changed-only"], report_file=cls.report_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+        cls.report_text, _ = read_report(cls.report_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path,
+                  cls.report_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0, self.stderr)
+
+    def test_voter_number_winner_gets_update(self):
+        """Priyanka (KG1-2) must receive the GVI/Party update — not Priya."""
+        priyanka = [r for r in self.rows if r["Voter Number"] == "KG1-2"][0]
+        self.assertEqual(priyanka[f"{LE2026} Most Recent Data - GVI"], "1")
+        self.assertEqual(priyanka[f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+
+    def test_runner_up_included_unchanged(self):
+        priya = [r for r in self.rows if r["Voter Number"] == "KG1-1"]
+        self.assertEqual(len(priya), 1,
+            "Runner-up must appear in --changed-only output via force_include_indices")
+        self.assertEqual(priya[0][f"{LE2026} Most Recent Data - GVI"], "")
+
+    def test_not_counted_as_ambiguous(self):
+        self.assertIn("Ambiguous: 0", self.report_text)
+        self.assertIn("Matched: 1", self.report_text)
+
+    def test_rejects2check_has_voter_number_entry(self):
+        self.assertTrue(os.path.exists(self.rejects_path),
+            "rejects2check.csv should be written")
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            rejects = list(csv.DictReader(f))
+        self.assertEqual(len(rejects), 1)
+        reason = rejects[0]["Reject_Reason"]
+        self.assertTrue(reason.startswith("Auto-resolved via elector number match"),
+            f"Unexpected reason prefix: {reason!r}")
+        self.assertIn("KG1-2", reason)        # winner
+        self.assertIn("uuid-priyanka", reason) # winner UUID
+        self.assertIn("KG1-1", reason)        # runner-up
+        self.assertIn("uuid-priya", reason)    # runner-up UUID
+
+
+class TestVoterNumberSuffixMatch(unittest.TestCase):
+    """App Voter Number is natively 'PDCode-RollNo-Suffix'; register only has
+    PDCode+RollNo. The voter-number tiebreaker must match by prefix so a reg
+    voter number 'KG1-2' matches an app voter number 'KG1-2-A'."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-1-A", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-2-B", "First Name": "Priyanka", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+        ]
+        cls.reg_rows = [
+            make_register_row(
+                PDCode="KG1", RollNo="2",
+                ElectorSurname="Patel", ElectorForename="Priyanka",
+                PostCode="NW10 3JU", Party="G"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        run_update(cls.app_path, cls.reg_path, cls.out_path,
+                   extra_args=["--changed-only"])
+        _, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_suffixed_voter_number_is_matched(self):
+        """Reg KG1-2 must resolve to app KG1-2-B despite the suffix."""
+        winner = [r for r in self.rows if r["Voter Number"] == "KG1-2-B"][0]
+        self.assertEqual(winner[f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+
+    def test_loser_unchanged(self):
+        """The non-winning candidate must not receive any field update."""
+        loser = [r for r in self.rows if r["Voter Number"] == "KG1-1-A"][0]
+        self.assertEqual(loser[f"{LE2026} Most Recent Data - Usual Party"], "")
+
+    def test_rejects2check_marks_elector_number_resolution(self):
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reason = list(csv.DictReader(f))[0]["Reject_Reason"]
+        self.assertTrue(reason.startswith("Auto-resolved via elector number match"),
+            f"Unexpected reason: {reason!r}")
+
+
+class TestVoterNumberOverridesPerfectNameScore(unittest.TestCase):
+    """When the register's PDCode+RollNo points to a candidate whose name
+    scores <1.0, the voter-number match MUST win even if another candidate
+    scored exactly 1.0 on name similarity. This guards against a data-entry
+    mistake on the app where a neighbour has the same name as the register
+    elector."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Register: Priya Patel, KG1-2
+        # App row KG1-1: Priya Patel (name score 1.0 — but WRONG person)
+        # App row KG1-2: Priyanka Patel (name score ~0.89 — correct person per VN)
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-1", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-2", "First Name": "Priyanka", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+        ]
+        cls.reg_rows = [
+            make_register_row(
+                PDCode="KG1", RollNo="2",
+                ElectorSurname="Patel", ElectorForename="Priya",
+                PostCode="NW10 3JU", Party="G"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.report_path = cls.out_path + ".report.txt"
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        run_update(cls.app_path, cls.reg_path, cls.out_path,
+                   extra_args=["--changed-only"], report_file=cls.report_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+        cls.report_text, _ = read_report(cls.report_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path,
+                  cls.report_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_voter_number_winner_gets_update(self):
+        priyanka = [r for r in self.rows if r["Voter Number"] == "KG1-2"][0]
+        self.assertEqual(priyanka[f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+
+    def test_perfect_score_name_match_does_not_get_update(self):
+        priya = [r for r in self.rows if r["Voter Number"] == "KG1-1"][0]
+        self.assertEqual(priya[f"{LE2026} Most Recent Data - Usual Party"], "")
+
+    def test_reason_is_elector_number_not_perfect_match(self):
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reason = list(csv.DictReader(f))[0]["Reject_Reason"]
+        self.assertTrue(reason.startswith("Auto-resolved via elector number match"),
+            f"VN should win over perfect name score, got: {reason!r}")
+
+    def test_counted_as_matched_not_ambiguous(self):
+        self.assertIn("Matched: 1", self.report_text)
+        self.assertIn("Ambiguous: 0", self.report_text)
+
+
 class TestTruePerfectTieFallsThroughToTiebreakers(unittest.TestCase):
     """Two candidates both at score=1.0 (e.g. duplicate app rows) must NOT
     trigger the perfect-match auto-resolve: the second_score < 1.0 guard means
@@ -1295,8 +1497,12 @@ class TestTruePerfectTieFallsThroughToTiebreakers(unittest.TestCase):
                 "Post Code": "NW10 3JU",
             }),
         ]
+        # Override PDCode+RollNo so the voter-number tiebreaker matches NEITHER
+        # app row; otherwise the default "KG1-1" would collide with app row 1
+        # and mask the branch under test.
         cls.reg_rows = [
-            make_register_row(ElectorSurname="Patel", ElectorForename="Priya",
+            make_register_row(PDCode="ZZ9", RollNo="999",
+                              ElectorSurname="Patel", ElectorForename="Priya",
                               PostCode="NW10 3JU", Party="G"),
         ]
         cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
@@ -1314,15 +1520,187 @@ class TestTruePerfectTieFallsThroughToTiebreakers(unittest.TestCase):
                   cls.report_path, cls.rejects_path]:
             if os.path.exists(p): os.unlink(p)
 
-    def test_not_auto_resolved(self):
-        """With two 1.0-score candidates, normal ambiguous handling must fire —
-        NOT the perfect-match auto-resolve branch."""
-        if os.path.exists(self.rejects_path):
-            with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
-                reasons = [r["Reject_Reason"] for r in csv.DictReader(f)]
-            for reason in reasons:
-                self.assertFalse(reason.startswith("Auto-resolved to perfect match"),
-                    f"Two-1.0-tie should not trigger auto-resolve, got: {reason!r}")
+    def test_counted_as_ambiguous_not_matched(self):
+        self.assertIn("Matched: 0", self.report_text)
+        self.assertIn("Ambiguous: 1", self.report_text)
+
+    def test_rejects_file_exists_with_plain_ambiguous_entry(self):
+        """A genuine two-1.0 tie produces a plain 'Ambiguous:' reject — not
+        an auto-resolved one — proving the second_score < 1.0 guard held."""
+        self.assertTrue(os.path.exists(self.rejects_path),
+            "Two-1.0-tie should produce an Ambiguous entry in rejects2check")
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reasons = [r["Reject_Reason"] for r in csv.DictReader(f)]
+        self.assertEqual(len(reasons), 1)
+        self.assertTrue(reasons[0].startswith("Ambiguous:"),
+            f"Expected plain 'Ambiguous:' prefix, got: {reasons[0]!r}")
+        self.assertFalse(reasons[0].startswith("Auto-resolved"),
+            f"Auto-resolve should not fire on two-1.0 tie, got: {reasons[0]!r}")
+
+
+class TestVoterNumberNoFalseMatchOnPrefix(unittest.TestCase):
+    """Reg PDCode-RollNo 'KG1-2' must NOT match app Voter Number 'KG1-20-X'.
+    Guards the trailing-dash in `vn_prefix` against future regression."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Only candidate is KG1-20 (extended roll number, different person).
+        # Names are close-but-ambiguous to ensure we enter the ambiguity block.
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-20-X", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-21-Y", "First Name": "Priyanka", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+        ]
+        # Reg voter number "KG1-2" — must NOT prefix-match "KG1-20-X" or "KG1-21-Y"
+        cls.reg_rows = [
+            make_register_row(
+                PDCode="KG1", RollNo="2",
+                ElectorSurname="Patel", ElectorForename="Priya",
+                PostCode="NW10 3JU", Party="G"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        run_update(cls.app_path, cls.reg_path, cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_not_resolved_via_voter_number(self):
+        """No reject entry should claim 'Auto-resolved via elector number
+        match' — KG1-2 is not a valid prefix of KG1-20 or KG1-21."""
+        self.assertTrue(os.path.exists(self.rejects_path))
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reasons = [r["Reject_Reason"] for r in csv.DictReader(f)]
+        for reason in reasons:
+            self.assertFalse(
+                reason.startswith("Auto-resolved via elector number match"),
+                f"KG1-2 must not prefix-match KG1-20 / KG1-21: {reason!r}")
+
+    def test_falls_through_to_perfect_score(self):
+        """Positive confirmation the VN tiebreaker fell through: Priya scores
+        1.0 against reg Priya so the perfect-score branch should resolve."""
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reasons = [r["Reject_Reason"] for r in csv.DictReader(f)]
+        self.assertEqual(len(reasons), 1)
+        self.assertTrue(reasons[0].startswith("Auto-resolved to perfect match"),
+            f"Expected perfect-score to resolve after VN fell through, got: {reasons[0]!r}")
+
+
+class TestEmptyVoterNumberFallsThroughToPerfectScore(unittest.TestCase):
+    """When the register row has no PDCode/RollNo, the voter-number tiebreaker
+    must be skipped and perfect-score auto-resolve should take over."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-1", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-2", "First Name": "Priyanka", "Surname": "Patel",
+                "Post Code": "NW10 3JU",
+            }),
+        ]
+        # Blank PDCode → reg_voter_num = "" → VN tiebreaker skipped.
+        cls.reg_rows = [
+            make_register_row(
+                PDCode="", RollNo="",
+                ElectorSurname="Patel", ElectorForename="Priya",
+                PostCode="NW10 3JU", Party="G"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        run_update(cls.app_path, cls.reg_path, cls.out_path,
+                   extra_args=["--changed-only"])
+        _, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_resolved_via_perfect_score(self):
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reasons = [r["Reject_Reason"] for r in csv.DictReader(f)]
+        self.assertEqual(len(reasons), 1)
+        self.assertTrue(reasons[0].startswith("Auto-resolved to perfect match"),
+            f"Expected perfect-match resolution, got: {reasons[0]!r}")
+
+    def test_correct_winner_gets_update(self):
+        """Priya (perfect name match) must receive the update — not Priyanka."""
+        priya = [r for r in self.rows if r["Voter Number"] == "KG1-1"][0]
+        self.assertEqual(priya[f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+        priyanka = [r for r in self.rows if r["Voter Number"] == "KG1-2"][0]
+        self.assertEqual(priyanka[f"{LE2026} Most Recent Data - Usual Party"], "")
+
+
+class TestTwoRegRowsClaimSameAppRowViaVN(unittest.TestCase):
+    """If two register rows both resolve via VN to the same app row, only the
+    first should get the match (and its 'Auto-resolved…' reject entry). The
+    second should get a single 'Ambiguous (tiebreaker target claimed)' entry —
+    NOT a contradictory pair of 'Auto-resolved' + 'Ambiguous'."""
+
+    @classmethod
+    def setUpClass(cls):
+        # Single app row that both reg rows will target via VN KG1-5.
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-5", "First Name": "Chris", "Surname": "Jones",
+                "Post Code": "NW10 3JU",
+            }),
+            # A decoy with a close name score so matching enters the ambiguity
+            # block for both reg rows.
+            make_app_row(**{
+                "Voter Number": "KG1-6", "First Name": "Christine", "Surname": "Jones",
+                "Post Code": "NW10 3JU",
+            }),
+        ]
+        cls.reg_rows = [
+            make_register_row(PDCode="KG1", RollNo="5",
+                              ElectorSurname="Jones", ElectorForename="Chris",
+                              PostCode="NW10 3JU", Party="G"),
+            make_register_row(PDCode="KG1", RollNo="5",
+                              ElectorSurname="Jones", ElectorForename="Chris",
+                              PostCode="NW10 3JU", Party="Lab"),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.report_path = cls.out_path + ".report.txt"
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        run_update(cls.app_path, cls.reg_path, cls.out_path,
+                   report_file=cls.report_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path,
+                  cls.report_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_exactly_two_reject_entries(self):
+        """One 'Auto-resolved' entry for the first reg row (successful match),
+        one 'Ambiguous (tiebreaker target claimed)' for the second, in that
+        order (input order of the register rows). A prior bug produced THREE
+        entries — two for the second reg row."""
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reasons = [r["Reject_Reason"] for r in csv.DictReader(f)]
+        self.assertEqual(len(reasons), 2, f"Expected 2 entries, got {len(reasons)}: {reasons}")
+        self.assertTrue(reasons[0].startswith("Auto-resolved"),
+            f"First entry should be the successful auto-resolve: {reasons[0]!r}")
+        self.assertTrue(reasons[1].startswith("Ambiguous (tiebreaker target claimed)"),
+            f"Second entry should be the claim-collision: {reasons[1]!r}")
 
 
 if __name__ == "__main__":

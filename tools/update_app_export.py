@@ -423,6 +423,8 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
     app_claimed = {}  # app_idx -> (reg_idx, reg_name)
 
     for reg_idx, reg_row in enumerate(register_rows):
+        pending_autoresolve_reject = None  # Flushed to rejects2check only if
+                                           # the match actually gets recorded.
         reg_surname = _get_field(reg_row, REG_SURNAME_KEYS)
         reg_forename = _get_field(reg_row, REG_FORENAME_KEYS)
         reg_name = f"{reg_forename} {reg_surname}".strip() or "(unknown)"
@@ -475,48 +477,41 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
             second_score = scored[1][0]
             is_ambiguous = (best_score - second_score) < AMBIGUITY_MARGIN
 
-            # A perfect score (1.0) beats any imperfect second score:
-            # treat as a clean match, but still flag in rejects2check (with a
-            # distinct "auto-resolved" reason) so the user can spot-verify.
-            if is_ambiguous and best_score == 1.0 and second_score < 1.0:
-                runner_up_info = []
-                for s in scored[1:]:
-                    if s[0] >= effective_threshold:
-                        report.force_include_indices.add(s[1])
-                        app_r = app_rows[s[1]]
-                        uuid = app_r.get("Voter UUID", "").strip()
-                        vn = app_r.get(ROW_KEY, "").strip()
-                        runner_up_info.append(
-                            f"{s[3]} {s[2]} (Voter={vn}, UUID={uuid}, score={s[0]:.2f})")
-                winner_app = app_rows[best_idx]
-                winner_uuid = winner_app.get("Voter UUID", "").strip()
-                winner_vn = winner_app.get(ROW_KEY, "").strip()
-                report.rejects2check.append((
-                    reg_row,
-                    f"Auto-resolved to perfect match (please spot-check): "
-                    f"applied to {best_name} (Voter={winner_vn}, UUID={winner_uuid}, "
-                    f"score=1.00); runner-up(s): {'; '.join(runner_up_info)}"))
-                is_ambiguous = False
-
             if is_ambiguous:
-                # Try tiebreakers: Voter Number, then DoA, then address
+                # Tiebreakers in priority order:
+                #   1. Voter Number (PDCode+RollNo) — strongest signal, can
+                #      override a name-score=1.0 if register VN disagrees
+                #   2. Perfect name score (1.0 vs <1.0) — "couple" shortcut
+                #   3. DoA, then address (silent, legacy behaviour)
                 resolved_idx = None
+                resolved_via = None
 
-                # Voter Number tiebreaker
+                # 1. Voter Number tiebreaker. App Voter Number is natively
+                # "PDCode-RollNo-Suffix"; register only has PDCode+RollNo,
+                # so match exact OR with a trailing "-suffix".
                 if reg_voter_num:
+                    vn_prefix = reg_voter_num + "-"
                     for s in scored:
-                        if s[0] >= effective_threshold and s[5] == reg_voter_num:
+                        if s[0] >= effective_threshold and (
+                                s[5] == reg_voter_num or s[5].startswith(vn_prefix)):
                             resolved_idx = s
+                            resolved_via = "voter_number"
                             break
 
-                # DoA tiebreaker
+                # 2. Perfect-score auto-resolve (only if voter number didn't decide)
+                if resolved_idx is None and best_score == 1.0 and second_score < 1.0:
+                    resolved_idx = scored[0]
+                    resolved_via = "perfect_score"
+
+                # 3. DoA tiebreaker
                 if resolved_idx is None and reg_doa_normalized:
                     for s in scored:
                         if s[0] >= effective_threshold and s[6] and s[6] == reg_doa_normalized:
                             resolved_idx = s
+                            resolved_via = "doa"
                             break
 
-                # Address tiebreaker
+                # 4. Address tiebreaker
                 if resolved_idx is None:
                     reg_addr = _get_register_address(reg_row)
                     if reg_addr:
@@ -527,11 +522,44 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
                         addr_scores.sort(key=lambda x: x[0], reverse=True)
                         if addr_scores[0][0] - addr_scores[1][0] >= AMBIGUITY_MARGIN:
                             resolved_idx = addr_scores[0][1]
+                            resolved_via = "address"
 
                 if resolved_idx is not None:
                     best_score, best_idx = resolved_idx[0], resolved_idx[1]
                     best_surname, best_forename = resolved_idx[2], resolved_idx[3]
                     best_name = f"{best_forename} {best_surname}".strip()
+
+                    # Surface voter_number and perfect_score resolutions in
+                    # rejects2check so the user can spot-check. DoA and address
+                    # tiebreakers stay silent (legacy behaviour). Deferred until
+                    # after the app_claimed check below succeeds — otherwise a
+                    # subsequent app_claimed collision would emit a contradictory
+                    # "Ambiguous (tiebreaker target claimed)" entry alongside
+                    # this "Auto-resolved" entry for the same register row.
+                    if resolved_via in ("voter_number", "perfect_score"):
+                        runner_up_info = []
+                        for s in scored:
+                            if s[1] == best_idx or s[0] < effective_threshold:
+                                continue
+                            report.force_include_indices.add(s[1])
+                            app_r = app_rows[s[1]]
+                            uuid = app_r.get("Voter UUID", "").strip()
+                            vn = app_r.get(ROW_KEY, "").strip()
+                            runner_up_info.append(
+                                f"{s[3]} {s[2]} (Voter={vn}, UUID={uuid}, score={s[0]:.2f})")
+                        winner_app = app_rows[best_idx]
+                        winner_uuid = winner_app.get("Voter UUID", "").strip()
+                        winner_vn = winner_app.get(ROW_KEY, "").strip()
+                        prefix = ("Auto-resolved via elector number match"
+                                  if resolved_via == "voter_number"
+                                  else "Auto-resolved to perfect match")
+                        pending_autoresolve_reject = (
+                            reg_row,
+                            f"{prefix} (please spot-check): "
+                            f"applied to {best_name} (Voter={winner_vn}, UUID={winner_uuid}, "
+                            f"score={best_score:.2f}); runner-up(s): "
+                            f"{'; '.join(runner_up_info) if runner_up_info else '(none above threshold)'}")
+                    is_ambiguous = False
                 else:
                     # Still ambiguous — add all candidates to rejects2check
                     above = [s for s in scored if s[0] >= effective_threshold]
@@ -574,6 +602,8 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
             report.matched += 1
             report.matched_details.append(
                 (reg_name, best_name, reg_pc, best_score))
+            if pending_autoresolve_reject is not None:
+                report.rejects2check.append(pending_autoresolve_reject)
         elif best_score >= 0.6:
             report.possible += 1
             report.possible_details.append(
