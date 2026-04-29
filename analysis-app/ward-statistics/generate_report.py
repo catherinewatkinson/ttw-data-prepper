@@ -963,9 +963,9 @@ def generate_html(stats, snapshots, password=None, plotly_js=""):
         '(2) Our knocked/answered counts include historical canvassing data uploaded from the '
         'previous canvassing app. TTW\'s ward stats only count door knocks recorded through '
         'TTW itself, so our figures will be higher.<br>'
-        '(3) The answered % is not terribly informative at present, as many canvassers are not '
-        'systematically recording "knocked but no answer" — only successful contacts. This means '
-        'the knocked and answered counts are closer than they should be.</p>'
+        '(3) The knocked stats are not reliably recorded in all wards — '
+        'some canvassers only log successful contacts, not unanswered doors. '
+        'These figures should not be taken as an accurate measure of canvassing effort.</p>'
     )
     table_section = f'<div class="chart"><h3>Summary Table</h3>{table_html}{dnk_note}</div>'
     status_section = f'<div class="chart">{fig_status.to_html(full_html=False, include_plotlyjs=False)}</div>'

@@ -1703,5 +1703,127 @@ class TestTwoRegRowsClaimSameAppRowViaVN(unittest.TestCase):
             f"Second entry should be the claim-collision: {reasons[1]!r}")
 
 
+# ---------------------------------------------------------------------------
+# Alternate column name headers (postal-voter / TTW-format register CSVs)
+# ---------------------------------------------------------------------------
+
+ALT_REGISTER_HEADERS = [
+    "PD code", "Roll no.", "FranchiseMarker", "Date of Attainment", "GE24",
+    "Postal Voter", "New", "P/PB", "DNK", "1st round",
+    "Surname", "Forename", "Full name",
+    "RegisteredAddress1", "RegisteredAddress2", "RegisteredAddress3",
+    "RegisteredAddress4", "RegisteredAddress5", "RegisteredAddress6",
+    "PostCode", "Party", "1-5", "Comments", "Email Address",
+    "Phone number", "Issues",
+]
+
+
+def make_alt_register_row(**overrides):
+    """Register row using alternate (postal-voter CSV style) column names."""
+    base = {h: "" for h in ALT_REGISTER_HEADERS}
+    base.update({
+        "PD code": "KG1",
+        "Roll no.": "1",
+        "Surname": "Patel",
+        "Forename": "Priya",
+        "RegisteredAddress1": "45 Chamberlayne Road",
+        "PostCode": "NW10 3JU",
+    })
+    base.update(overrides)
+    return base
+
+
+class TestAltColumnVoterNumberTiebreaker(unittest.TestCase):
+    """Voter-number tiebreaker must work when the register CSV uses
+    'PD code' / 'Roll no.' instead of 'PDCode' / 'RollNo'."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [
+            make_app_row(**{
+                "Voter Number": "KG1-1", "First Name": "Priya", "Surname": "Patel",
+                "Post Code": "NW10 3JU", "Voter UUID": "uuid-priya",
+            }),
+            make_app_row(**{
+                "Voter Number": "KG1-2", "First Name": "Priyanka", "Surname": "Patel",
+                "Post Code": "NW10 3JU", "Voter UUID": "uuid-priyanka",
+            }),
+        ]
+        # Alternate headers: "PD code" and "Roll no." with value pointing to KG1-2
+        cls.reg_rows = [
+            make_alt_register_row(**{
+                "PD code": "KG1", "Roll no.": "2",
+                "Surname": "Patel", "Forename": "Priyanka",
+                "PostCode": "NW10 3JU", "Party": "G",
+            }),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, ALT_REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.rejects_path = cls.out_path[:-4] + ".rejects2check.csv"
+        cls.rc, _, cls.stderr = run_update(
+            cls.app_path, cls.reg_path, cls.out_path,
+            extra_args=["--changed-only"])
+        _, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path, cls.rejects_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0, self.stderr)
+
+    def test_vn_tiebreaker_resolves_with_alt_headers(self):
+        """KG1-2 in 'Roll no.' column must resolve to app row KG1-2."""
+        priyanka = [r for r in self.rows if r["Voter Number"] == "KG1-2"][0]
+        self.assertEqual(priyanka[f"{LE2026} Most Recent Data - Usual Party"], "Greens")
+
+    def test_rejects2check_shows_elector_number_resolution(self):
+        self.assertTrue(os.path.exists(self.rejects_path))
+        with open(self.rejects_path, "r", encoding="utf-8-sig", newline="") as f:
+            reason = list(csv.DictReader(f))[0]["Reject_Reason"]
+        self.assertTrue(reason.startswith("Auto-resolved via elector number match"),
+            f"Expected VN auto-resolve with alt headers, got: {reason!r}")
+
+
+class TestAltColumnDoaApplication(unittest.TestCase):
+    """Date of Attainment must be applied when the register CSV uses
+    'Date of Attainment' instead of 'DateOfAttainment'."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_rows = [
+            make_app_row(**{
+                "First Name": "Priya", "Surname": "Patel", "Post Code": "NW10 3JU",
+            }),
+        ]
+        cls.reg_rows = [
+            make_alt_register_row(**{
+                "Surname": "Patel", "Forename": "Priya",
+                "PostCode": "NW10 3JU",
+                "Date of Attainment": "01/01/2008",
+            }),
+        ]
+        cls.app_path = write_temp_csv(cls.app_rows, APP_EXPORT_HEADERS)
+        cls.reg_path = write_temp_csv(cls.reg_rows, ALT_REGISTER_HEADERS)
+        fd, cls.out_path = tempfile.mkstemp(suffix=".csv"); os.close(fd)
+        cls.rc, _, cls.stderr = run_update(cls.app_path, cls.reg_path, cls.out_path)
+        _, cls.rows = read_output_csv(cls.out_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        for p in [cls.app_path, cls.reg_path, cls.out_path]:
+            if os.path.exists(p): os.unlink(p)
+
+    def test_exit_code(self):
+        self.assertEqual(self.rc, 0, self.stderr)
+
+    def test_doa_written_with_alt_header(self):
+        """'Date of Attainment' column must be read and written to app-export."""
+        self.assertNotEqual(self.rows[0]["Date of Attainment"], "",
+            "DoA should have been applied from the 'Date of Attainment' column")
+
+
 if __name__ == "__main__":
     unittest.main()

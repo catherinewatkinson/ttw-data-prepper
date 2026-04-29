@@ -61,6 +61,12 @@ REG_ADDRESS_KEYS = [
      "RegisteredAddress4", "RegisteredAddress5", "RegisteredAddress6"),
     ("Address1", "Address2", "Address3", "Address4", "Address5", "Address6"),
 ]
+REG_PDCODE_KEYS = ["PDCode", "PD code", "PD Code", "Elector No. Prefix",
+                   "Elector No Prefix"]
+REG_ROLLNO_KEYS = ["RollNo", "Roll no.", "Roll No", "Roll no",
+                   "Elector No.", "Elector No"]
+REG_DOA_KEYS = ["DateOfAttainment", "Date of Attainment", "Date Of Attainment",
+                "DateofAttainment"]
 
 # Required app-export target columns (checked at startup)
 REQUIRED_APP_TARGETS = [
@@ -448,12 +454,12 @@ def match_register_to_app(register_rows, app_rows, threshold, report):
             continue
 
         # Build register voter number for tiebreaking
-        reg_pdcode = reg_row.get("PDCode", "").strip()
-        reg_rollno = reg_row.get("RollNo", "").strip()
+        reg_pdcode = _get_field(reg_row, REG_PDCODE_KEYS)
+        reg_rollno = _get_field(reg_row, REG_ROLLNO_KEYS)
         reg_voter_num = f"{reg_pdcode}-{reg_rollno}" if reg_pdcode and reg_rollno else ""
 
         # Normalize register DoA for tiebreaking
-        reg_doa_raw = reg_row.get("DateOfAttainment", "").strip()
+        reg_doa_raw = _get_field(reg_row, REG_DOA_KEYS)
         reg_doa_normalized = ""
         if reg_doa_raw:
             norm, _ = normalize_date(reg_doa_raw)
@@ -651,7 +657,7 @@ def apply_updates(app_rows, matched, report, data_date):
             return False
 
         # --- DateOfAttainment ---
-        doa = reg_row.get("DateOfAttainment", "").strip()
+        doa = _get_field(reg_row, REG_DOA_KEYS)
         if doa:
             normalized, warn = normalize_date(doa)
             if normalized:

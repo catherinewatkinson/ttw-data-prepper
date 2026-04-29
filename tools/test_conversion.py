@@ -13,6 +13,7 @@ Uses stdlib unittest. Zero external dependencies.
 import argparse
 import csv
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -348,11 +349,18 @@ class TestFieldMapping(unittest.TestCase):
         self.assertTrue(len(obrien) >= 1, "O'Brien-Smythe should be in output")
         self.assertEqual(obrien[0]["Surname"], "O'Brien-Smythe")
 
-    def test_subhouse_not_incorporated_into_address1(self):
-        """SubHouse data should NOT be incorporated into Address1 (pass-through only)."""
+    def test_subhouse_house_composed_into_address1(self):
+        """SubHouse/House are composed into Address1/Address2; council's
+        redundant duplicate of House in RegisteredAddress1 is collapsed out."""
         kate = [r for r in self.rows if r["Surname"] == "WithSubHouse"]
         self.assertEqual(len(kate), 1)
-        self.assertEqual(kate[0]["Address1"], "Oak Manor")
+        # Fixture has SubHouse="Flat 3", House="Oak Manor",
+        # RegisteredAddress1="Oak Manor" (council redundancy),
+        # RegisteredAddress2="21 Willesden Lane".
+        self.assertEqual(kate[0]["Address1"], "Flat 3")
+        self.assertEqual(kate[0]["Address2"], "Oak Manor")
+        # RA1 was a dup of House — dropped from the shift; RA2 lands at Address3.
+        self.assertEqual(kate[0]["Address3"], "21 Willesden Lane")
 
     def test_no_discarded_columns_by_default(self):
         """Without --strip-extra, no columns should be listed as discarded."""
@@ -1673,18 +1681,25 @@ class TestRealisticMessyData(unittest.TestCase):
         self.assertIn("SubHouse", self.headers)
         self.assertIn("House", self.headers)
 
-    def test_subhouse_not_incorporated_fernandez(self):
-        """Fernandez Address1 should NOT have SubHouse data incorporated."""
+    def test_subhouse_composed_fernandez(self):
+        """Fernandez rows have SubHouse folded into Address1, House into Address2."""
         fernandez = [r for r in self.rows if r["Surname"] == "Fernandez"]
         self.assertEqual(len(fernandez), 2)
         addr1s = sorted(r["Address1"] for r in fernandez)
-        self.assertEqual(addr1s, ["Regency Court", "Regency Court"])
+        self.assertEqual(addr1s, ["Flat 2", "Flat 3"])
+        for r in fernandez:
+            self.assertEqual(r["Address2"], "Regency Court")
+            # Council put "Regency Court" in RegisteredAddress1 too — that
+            # duplicate is dropped, so Address3 carries the road.
+            self.assertEqual(r["Address3"], "35 Chamberlayne Road")
 
-    def test_subhouse_not_incorporated_rivera(self):
-        """Rivera Address1 should NOT have SubHouse data incorporated."""
+    def test_subhouse_composed_rivera(self):
+        """Rivera row has SubHouse=Flat 9 folded into Address1."""
         rivera = [r for r in self.rows if r["Surname"] == "Rivera"]
         self.assertEqual(len(rivera), 1)
-        self.assertEqual(rivera[0]["Address1"], "Kilburn Court")
+        self.assertEqual(rivera[0]["Address1"], "Flat 9")
+        self.assertEqual(rivera[0]["Address2"], "Kilburn Court")
+        self.assertEqual(rivera[0]["Address3"], "10 Kilburn Lane")
 
     # --- Multi-elector addresses ---
 
@@ -3884,7 +3899,10 @@ def _write_temp_csv(rows, headers, encoding="utf-8-sig"):
 
 _PAD_COUNCIL_HEADERS = [
     "PDCode", "RollNo", "ElectorSurname", "ElectorForename",
-    "RegisteredAddress1", "RegisteredAddress2", "PostCode",
+    "RegisteredAddress1", "RegisteredAddress2",
+    "RegisteredAddress3", "RegisteredAddress4",
+    "RegisteredAddress5", "RegisteredAddress6",
+    "PostCode", "SubHouse", "House",
 ]
 
 _PAD_TTW_HEADERS = [
@@ -3893,11 +3911,16 @@ _PAD_TTW_HEADERS = [
 ]
 
 
-def _make_council_row(pdcode, rollno, surname, forename, addr1, addr2, postcode):
+def _make_council_row(pdcode, rollno, surname, forename, addr1, addr2, postcode,
+                       sub_house="", house="",
+                       addr3="", addr4="", addr5="", addr6=""):
     base = {h: "" for h in _PAD_COUNCIL_HEADERS}
     base.update({"PDCode": pdcode, "RollNo": rollno, "ElectorSurname": surname,
                  "ElectorForename": forename, "RegisteredAddress1": addr1,
-                 "RegisteredAddress2": addr2, "PostCode": postcode})
+                 "RegisteredAddress2": addr2,
+                 "RegisteredAddress3": addr3, "RegisteredAddress4": addr4,
+                 "RegisteredAddress5": addr5, "RegisteredAddress6": addr6,
+                 "PostCode": postcode, "SubHouse": sub_house, "House": house})
     return base
 
 
@@ -4384,13 +4407,15 @@ class TestChangeTypeID(unittest.TestCase):
         self.assertEqual(rows[0]["Elector No. Suffix"], "0")
 
     def test_ad_no_reference_warns(self):
-        """A/D row with no matching reference → warn, suffix '0'."""
+        """A/D row with no matching reference → ORPHAN-{row_num} sentinel + critical warning."""
         ref = [self._make_ref_row("KG1", "999", "0")]
         update = [_make_council_row_ct("KG1", "100", "Smith", "John",
                                         "Flat 1", "High Road", "NW10 3JU", "A")]
         _, rows, report = self._run(update, ref)
-        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
-        self.assertIn("no reference entry", report.lower())
+        self.assertTrue(rows[0]["Elector No. Suffix"].startswith("ORPHAN-"),
+                        f"Expected ORPHAN-* sentinel, got {rows[0]['Elector No. Suffix']!r}")
+        self.assertIn("orphan", report.lower())
+        self.assertIn("manual check required", report.lower())
 
     def test_new_row_skips_ad_suffix(self):
         """N row doesn't get a suffix already assigned to an A/D row."""
@@ -4655,6 +4680,731 @@ class TestChangeTypeID(unittest.TestCase):
         self.assertEqual(oconnor["Elector No. Prefix"], "HP1")
         # Nguyen is new, no ref collision at HP1-600
         self.assertEqual(nguyen["Elector No. Suffix"], "0")
+
+
+# ---------------------------------------------------------------------------
+# Plan-mandated regression tests for decimal stripping, A/D matching, and
+# orphan handling (PLAN_clean_register_updates.md tests 1-17)
+# ---------------------------------------------------------------------------
+
+
+class TestDecimalAndOrphanHandling(unittest.TestCase):
+    """Tests for the universal decimal-strip + Phase A/B suffix rework."""
+
+    def _make_ref_row(self, prefix, number, suffix, surname="Test", forename="Test",
+                      addr1="Flat 1", addr2="High Road", postcode="NW10 3JU"):
+        row = _make_ttw_row(addr1, addr2, postcode)
+        row["Elector No. Prefix"] = prefix
+        row["Elector No."] = number
+        row["Elector No. Suffix"] = suffix
+        row["Full Elector No."] = f"{prefix}-{number}-{suffix}" if suffix else f"{prefix}-{number}"
+        row["Surname"] = surname
+        row["Forename"] = forename
+        return row
+
+    def _run(self, update_rows, reference_rows, council_headers=None):
+        headers = council_headers or _PAD_COUNCIL_HEADERS_CT
+        update_path = _write_temp_csv(update_rows, headers)
+        ref_path = _write_temp_csv(reference_rows, _PAD_TTW_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        fd2, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd2)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      extra_args=["--full-register", ref_path],
+                                      report_file=report_path)
+            self.assertEqual(rc, 0, stderr)
+            headers_out, rows = read_output_csv(out_path)
+            report_text = Path(report_path).read_text(encoding="utf-8")
+            return headers_out, rows, report_text
+        finally:
+            for p in [update_path, ref_path, out_path, report_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    # --- Test 1: decimal stripping universal (no ChangeTypeID) ---
+    def test_1_decimal_stripped_no_change_type(self):
+        """N row with RollNo 5678.0 (no ChangeTypeID) → Elector No. = 5678."""
+        update = [_make_council_row("KG1", "5678.0", "Test", "Person",
+                                     "Flat 1", "High Road", "NW10 3JU")]
+        update_path = _write_temp_csv(update, _PAD_COUNCIL_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path)
+            self.assertEqual(rc, 0, stderr)
+            _, rows = read_output_csv(out_path)
+            self.assertEqual(rows[0]["Elector No."], "5678")
+            self.assertNotIn(".", rows[0]["Elector No."])
+        finally:
+            for p in [update_path, out_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    # --- Test 2: A row, single candidate ---
+    def test_2_amend_single_candidate(self):
+        """A row with one ref candidate at 1234-2 → suffix = '2', no warning."""
+        ref = [self._make_ref_row("KG1", "1234", "2", surname="Smith", forename="John")]
+        update = [_make_council_row_ct("KG1", "1234.1", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, report = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No."], "1234")
+        self.assertEqual(rows[0]["Elector No. Suffix"], "2")
+        self.assertNotIn("low confidence", report.lower())
+
+    # --- Test 3: multi-candidate confident ---
+    def test_3_amend_confident_multi(self):
+        """Two ref candidates, name+address clearly favours one → no warning."""
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Smith", forename="John",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("KG1", "1234", "1", surname="Wong", forename="Mei",
+                               addr1="Flat 2", addr2="Low Road"),
+        ]
+        update = [_make_council_row_ct("KG1", "1234", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, report = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+        self.assertNotIn("low confidence", report.lower())
+
+    # --- Test 4: ambiguous score-only failure ---
+    def test_4_amend_ambiguous_score_only(self):
+        """Score-only failure: best ~0.4 (< 0.6), second ~0.0 (margin ~0.4 >= 0.15).
+
+        Names are entirely dissimilar across update + both refs (name_sim=0),
+        so the score is driven purely by address. ref0 has 2/3 address tokens
+        in common with update → addr_sim=0.8 → score=0.4. ref1 shares nothing
+        → score=0.0. Locks in the score-clause path: low score, wide margin.
+        """
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Cccc", forename="Dddd",
+                               addr1="222 Foo Road", addr2="",
+                               postcode="NW10 3JU"),
+            self._make_ref_row("KG1", "1234", "1", surname="Eeee", forename="Ffff",
+                               addr1="999 Bar Lane", addr2="",
+                               postcode="NW10 3JU"),
+        ]
+        update = [_make_council_row_ct("KG1", "1234", "Aaaa", "Bbbb",
+                                        "111 Foo Road", "", "NW10 3JU", "A")]
+        _, _, report = self._run(update, ref)
+        self.assertIn("low confidence", report.lower())
+        # Lock the score-clause path: extract reported best score, assert < 0.6
+        # AND margin >= 0.15 (so the warning fired on the score clause, not margin).
+        m = re.search(r"score=([\d.]+),\s*margin=([\d.]+)", report)
+        self.assertIsNotNone(m, f"score/margin not found in report:\n{report}")
+        score, margin = float(m.group(1)), float(m.group(2))
+        self.assertLess(score, 0.6, f"score-clause should fire: score={score}")
+        self.assertGreaterEqual(margin, 0.15,
+            f"margin must NOT also be the reason: margin={margin}")
+
+    # --- Test 4b: ambiguous margin-only failure ---
+    def test_4b_amend_ambiguous_margin_only(self):
+        """Both candidates score similarly high → margin too small → warn."""
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Smith", forename="John",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("KG1", "1234", "1", surname="Smith", forename="Jon",
+                               addr1="Flat 1", addr2="High Road"),
+        ]
+        update = [_make_council_row_ct("KG1", "1234", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, _, report = self._run(update, ref)
+        self.assertIn("low confidence", report.lower())
+        # Lock the margin-clause path: best score must be >= 0.6 (so score
+        # clause does NOT fire) AND margin < 0.15 (so margin clause does fire).
+        m = re.search(r"score=([\d.]+),\s*margin=([\d.]+)", report)
+        self.assertIsNotNone(m, f"score/margin not found in report:\n{report}")
+        score, margin = float(m.group(1)), float(m.group(2))
+        self.assertGreaterEqual(score, 0.6,
+            f"score must NOT also be the reason: score={score}")
+        self.assertLess(margin, 0.15, f"margin-clause should fire: margin={margin}")
+
+    # --- Test 4c: confident with margin (negative anchor) ---
+    def test_4c_amend_confident_with_margin(self):
+        """High score AND wide margin → no warning."""
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Smith", forename="John",
+                               addr1="Flat 1", addr2="High Road"),
+            self._make_ref_row("KG1", "1234", "1", surname="Wong", forename="Mei",
+                               addr1="Flat 2", addr2="Low Road"),
+        ]
+        update = [_make_council_row_ct("KG1", "1234", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, report = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+        self.assertNotIn("low confidence", report.lower())
+
+    # --- Test 5: D row, orphan ---
+    def test_5_delete_orphan(self):
+        """D row with no ref candidate → ORPHAN-{row_num} sentinel + critical warning."""
+        ref = [self._make_ref_row("KG1", "999", "0")]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "D")]
+        _, rows, report = self._run(update, ref)
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["Elector No. Suffix"].startswith("ORPHAN-"),
+                        f"got {rows[0]['Elector No. Suffix']!r}")
+        self.assertIn("orphan d", report.lower())
+
+    # --- Test 6: A row, orphan ---
+    def test_6_amend_orphan(self):
+        """A row with no ref candidate → ORPHAN-{row_num} sentinel + critical warning."""
+        ref = [self._make_ref_row("KG1", "999", "0")]
+        update = [_make_council_row_ct("KG1", "100", "Smith", "John",
+                                        "Flat 1", "High Road", "NW10 3JU", "A")]
+        _, rows, report = self._run(update, ref)
+        self.assertTrue(rows[0]["Elector No. Suffix"].startswith("ORPHAN-"))
+        self.assertIn("orphan a", report.lower())
+
+    # --- Test 7: N rows + reference suffixes, decimals stripped ---
+    def test_7_n_rows_skip_reference_suffixes(self):
+        """Ref has (KG1, 1234) suffixes {0,1}; two N rows at 1234.0 and 1234.1 → 2, 3."""
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Existing", forename="One"),
+            self._make_ref_row("KG1", "1234", "1", surname="Existing", forename="Two"),
+        ]
+        update = [
+            _make_council_row_ct("KG1", "1234.0", "New", "Alpha",
+                                  "Flat 3", "High Road", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "1234.1", "New", "Beta",
+                                  "Flat 4", "High Road", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        for r in rows:
+            self.assertEqual(r["Elector No."], "1234")
+        suffixes = sorted(r["Elector No. Suffix"] for r in rows)
+        self.assertEqual(suffixes, ["2", "3"])
+
+    # --- Test 8: mixed A + N in same group ---
+    def test_8_mixed_a_and_n(self):
+        """Ref at 1234-{0,1}; A matches 1234-1; two N rows → A keeps 1, N gets 2, 3."""
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Smith", forename="John"),
+            self._make_ref_row("KG1", "1234", "1", surname="Jones", forename="Mary"),
+        ]
+        update = [
+            _make_council_row_ct("KG1", "1234", "Jones", "Mary",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "1234.5", "New", "One",
+                                  "Flat 1", "High Road", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "1234.7", "New", "Two",
+                                  "Flat 1", "High Road", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        jones = [r for r in rows if r["Surname"] == "Jones"][0]
+        news = sorted([r for r in rows if r["Surname"] == "New"],
+                      key=lambda r: r["Forename"])
+        self.assertEqual(jones["Elector No. Suffix"], "1")
+        self.assertEqual([r["Elector No. Suffix"] for r in news], ["2", "3"])
+
+    # --- Test 9: brand-new (prefix, number) for N row ---
+    def test_9_n_brand_new_key(self):
+        """N row at (prefix, number) absent from ref → suffix '0'."""
+        ref = [self._make_ref_row("KG1", "9999", "0")]
+        update = [_make_council_row_ct("KG1", "1234", "New", "Person",
+                                        "Flat 1", "High Road", "NW10 3JU", "N")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "0")
+
+    # --- Test 10: two N rows brand-new key ---
+    def test_10_two_n_brand_new(self):
+        """Two N rows at brand-new (prefix, number) → suffixes '0' and '1'."""
+        ref = [self._make_ref_row("KG1", "9999", "0")]
+        update = [
+            _make_council_row_ct("KG1", "1234", "New", "Alpha",
+                                  "Flat 1", "High Road", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "1234", "New", "Beta",
+                                  "Flat 2", "High Road", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        suffixes = sorted(r["Elector No. Suffix"] for r in rows)
+        self.assertEqual(suffixes, ["0", "1"])
+
+    # --- Test 11: cross-file padding regression (postcode case mismatch) ---
+    def test_11_cross_file_padding_postcode_normalised(self):
+        """Reference postcode 'NW10 3LB', update 'nw103lb'; ref Flat 12 → update Flat 03."""
+        ref = []
+        for n in range(1, 13):
+            ref.append(self._make_ref_row("KG1", str(100 + n), "0",
+                                           surname=f"Existing{n}", forename="Resident",
+                                           addr1=f"Flat {n:02d}",
+                                           addr2="High Road",
+                                           postcode="NW10 3LB"))
+        update = [_make_council_row_ct("KG1", "200", "New", "Person",
+                                        "Flat 3", "High Road", "nw103lb", "N")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Address1"], "Flat 03")
+
+    # --- Test 12: determinism (same input twice → byte-identical output) ---
+    def test_12_determinism(self):
+        """Running the cleaner on the same council-format input twice produces
+        byte-identical output."""
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Smith", forename="John"),
+            self._make_ref_row("KG1", "1234", "1", surname="Jones", forename="Mary"),
+        ]
+        update = [
+            _make_council_row_ct("KG1", "1234", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "1234.5", "New", "Person",
+                                  "Flat 1", "High Road", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "1234.7", "Other", "Person",
+                                  "Flat 1", "High Road", "NW10 3JU", "N"),
+        ]
+        update_path = _write_temp_csv(update, _PAD_COUNCIL_HEADERS_CT)
+        ref_path = _write_temp_csv(ref, _PAD_TTW_HEADERS)
+        try:
+            outputs = []
+            for _ in range(2):
+                fd, out_path = tempfile.mkstemp(suffix=".csv")
+                os.close(fd)
+                try:
+                    rc, _, stderr = run_clean(update_path, out_path,
+                                              extra_args=["--full-register", ref_path])
+                    self.assertEqual(rc, 0, stderr)
+                    outputs.append(Path(out_path).read_bytes())
+                finally:
+                    if os.path.exists(out_path):
+                        os.unlink(out_path)
+            self.assertEqual(outputs[0], outputs[1])
+        finally:
+            for p in [update_path, ref_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    # --- Test 13: two orphans at same (prefix, number) ---
+    def test_13_two_orphans_same_key(self):
+        """Two orphan A/D at same (prefix, number) → distinct ORPHAN-{row_num}; no FEN collision."""
+        ref = [self._make_ref_row("KG1", "9999", "0")]
+        update = [
+            _make_council_row_ct("KG1", "100", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "100", "Jones", "Mary",
+                                  "Flat 2", "High Road", "NW10 3JU", "D"),
+        ]
+        _, rows, report = self._run(update, ref)
+        self.assertEqual(len(rows), 2)
+        suffixes = sorted(r["Elector No. Suffix"] for r in rows)
+        # Distinct sentinels — one per row
+        self.assertEqual(len(set(suffixes)), 2)
+        self.assertTrue(all(s.startswith("ORPHAN-") for s in suffixes))
+        # Full Elector Numbers must also differ
+        fens = sorted(r["Full Elector No."] for r in rows)
+        self.assertEqual(len(set(fens)), 2)
+        # Two critical warnings
+        self.assertGreaterEqual(report.lower().count("orphan"), 2)
+        # Defensive dedup must NOT log a spurious COLLISION (per-row sentinels
+        # guarantee distinct FENs, so the all-skipped branch should never fire).
+        self.assertNotIn("collision", report.lower())
+
+    # --- Test 14: N row displaced by A/D ---
+    def test_14_n_displaced_by_ad(self):
+        """Ref at 1234-0; A row matches 1234-0; single N row in same group → N gets '1'."""
+        ref = [self._make_ref_row("KG1", "1234", "0", surname="Smith", forename="John")]
+        update = [
+            _make_council_row_ct("KG1", "1234", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+            _make_council_row_ct("KG1", "1234", "New", "Person",
+                                  "Flat 2", "High Road", "NW10 3JU", "N"),
+        ]
+        _, rows, _ = self._run(update, ref)
+        amend = [r for r in rows if r["Surname"] == "Smith"][0]
+        new = [r for r in rows if r["Surname"] == "New"][0]
+        self.assertEqual(amend["Elector No. Suffix"], "0")
+        self.assertEqual(new["Elector No. Suffix"], "1")
+
+    # --- Test 15: reference contains non-numeric suffix ---
+    def test_15_non_numeric_reference_suffix(self):
+        """Ref at (KG1, 1234) has suffixes {0, A}; new N row → '1' (skips '0', ignores 'A')."""
+        ref = [
+            self._make_ref_row("KG1", "1234", "0", surname="Existing", forename="Zero"),
+            self._make_ref_row("KG1", "1234", "A", surname="Existing", forename="Alpha"),
+        ]
+        update = [_make_council_row_ct("KG1", "1234", "New", "Person",
+                                        "Flat 1", "High Road", "NW10 3JU", "N")]
+        _, rows, _ = self._run(update, ref)
+        self.assertEqual(rows[0]["Elector No. Suffix"], "1")
+
+    # --- Test 16: postcode normalisation move doesn't double-warn ---
+    def test_16_postcode_warning_not_doubled(self):
+        """An invalid postcode warning is reported exactly once.
+
+        Postcode normalisation moved from Step 9 to Step 6.65 so cross-file
+        padding keys can match. The earlier site must replace the later one,
+        not run alongside it — otherwise a malformed postcode would emit two
+        identical warnings.
+        """
+        ref = [self._make_ref_row("KG1", "999", "0")]
+        # "ZZZ9ZZ" passes normalize_postcode's reformatter but fails its
+        # UK_POSTCODE_RE check, so it returns a single warning.
+        update = [_make_council_row_ct("KG1", "100", "Test", "Person",
+                                        "Flat 1", "High Road", "ZZZ9ZZ", "N")]
+        _, _, report = self._run(update, ref)
+        # Count only the machine-readable WARNING|Field=PostCode lines so the
+        # human-readable + machine-readable dual rendering doesn't inflate the
+        # count. A second postcode-normalisation pass would emit a second
+        # WARNING line here.
+        pc_warning_lines = [ln for ln in report.splitlines()
+                            if ln.startswith("WARNING|") and "Field=PostCode" in ln]
+        self.assertEqual(len(pc_warning_lines), 1,
+            f"postcode warning emitted {len(pc_warning_lines)} times "
+            f"(expected exactly 1). Report:\n{report}")
+
+    # --- Test 17: no `_`-prefixed key leaks into output CSV ---
+    def test_17_no_internal_keys_in_output(self):
+        """`_RollNoFrac` and any other internal/synthetic keys must never
+        appear as CSV column headers in the output."""
+        ref = [self._make_ref_row("KG1", "1234", "0", surname="Smith", forename="John")]
+        update = [
+            _make_council_row_ct("KG1", "1234.5", "New", "Person",
+                                  "Flat 1", "High Road", "NW10 3JU", "N"),
+            _make_council_row_ct("KG1", "1234", "Smith", "John",
+                                  "Flat 1", "High Road", "NW10 3JU", "A"),
+        ]
+        headers, _, _ = self._run(update, ref)
+        leaked = [h for h in headers if h.startswith("_")]
+        self.assertEqual(leaked, [],
+            f"internal/synthetic keys leaked into output headers: {leaked}")
+
+
+# ---------------------------------------------------------------------------
+# Plan-mandated tests for SubHouse/House mapping + cross-file flat padding
+# (PLAN_padding_subhouse_fix.md tests 1-11 + B2 regression)
+# ---------------------------------------------------------------------------
+
+
+def _make_app_export_ref_row(voter_number, first_name="Test", surname="Test",
+                              house_name="", house_number="", road="",
+                              post_code="NW10 3JU"):
+    """Build a TTW app-export-format row used for --full-register tests
+    that need House Name / House Number / Road structure rather than
+    pre-cleaned Address1/Address2."""
+    return {
+        "Voter Number": voter_number,
+        "First Name": first_name,
+        "Surname": surname,
+        "House Name": house_name,
+        "House Number": house_number,
+        "Road": road,
+        "Post Code": post_code,
+    }
+
+
+_APP_EXPORT_HEADERS = [
+    "Voter Number", "First Name", "Surname",
+    "House Name", "House Number", "Road", "Post Code",
+]
+
+
+class TestSubHouseHousePadding(unittest.TestCase):
+    """Tests for SubHouse/House mapping + cross-file flat padding."""
+
+    def _run_council_only(self, council_rows, council_headers=None):
+        """Run cleaner without --full-register; council format input."""
+        headers = council_headers or _PAD_COUNCIL_HEADERS
+        update_path = _write_temp_csv(council_rows, headers)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        fd2, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd2)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      report_file=report_path)
+            self.assertEqual(rc, 0, stderr)
+            headers_out, rows = read_output_csv(out_path)
+            report_text = Path(report_path).read_text(encoding="utf-8")
+            return headers_out, rows, report_text
+        finally:
+            for p in [update_path, out_path, report_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def _run_with_app_ref(self, council_rows, ref_rows,
+                          council_headers=None):
+        """Run cleaner with --full-register pointing to a TTW app-export."""
+        headers = council_headers or _PAD_COUNCIL_HEADERS
+        update_path = _write_temp_csv(council_rows, headers)
+        ref_path = _write_temp_csv(ref_rows, _APP_EXPORT_HEADERS)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        fd2, report_path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd2)
+        try:
+            rc, _, stderr = run_clean(update_path, out_path,
+                                      extra_args=["--full-register", ref_path],
+                                      report_file=report_path)
+            self.assertEqual(rc, 0, stderr)
+            headers_out, rows = read_output_csv(out_path)
+            report_text = Path(report_path).read_text(encoding="utf-8")
+            return headers_out, rows, report_text
+        finally:
+            for p in [update_path, ref_path, out_path, report_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    # --- Test 1: reference width extraction with trailing building name ---
+    def test_1_ref_width_with_trailing_building(self):
+        """TTW reference with House Name='Flat 0302 Queensbrook Building'
+        contributes width 4 to its (Address2=building, postcode) group."""
+        from clean_register import build_padding_reference
+
+        # Write a tiny app-export to a temp file and call build_padding_reference.
+        ref_rows = [
+            _make_app_export_ref_row("KG1-100-0",
+                house_name="Flat 0302 Queensbrook Building",
+                road="Wenlock Road", post_code="NW10 3JU"),
+        ]
+        ref_path = _write_temp_csv(ref_rows, _APP_EXPORT_HEADERS)
+        try:
+            flat_w, _, _, _ = build_padding_reference(ref_path)
+            # _padding_key uppercases addr; postcode normaliser canonicalises.
+            from clean_register import _padding_key
+            key = _padding_key("Queensbrook Building", "NW10 3JU")
+            self.assertIn(key, flat_w,
+                f"expected padding key {key} in {sorted(flat_w.keys())}")
+            self.assertEqual(flat_w[key], 4)
+        finally:
+            if os.path.exists(ref_path):
+                os.unlink(ref_path)
+
+    # --- Test 2: SubHouse/House → Address1/Address2, no shift needed ---
+    def test_2_subhouse_house_no_shift(self):
+        """SubHouse + House populated, RegisteredAddress* empty.
+        Cleaned: Address1=SubHouse, Address2=House."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="", addr2="", postcode="NW10 3JU",
+                                     sub_house="Flat 105",
+                                     house="Queensbrook Building")]
+        _, rows, _ = self._run_council_only(update)
+        self.assertEqual(rows[0]["Address1"], "Flat 105")
+        self.assertEqual(rows[0]["Address2"], "Queensbrook Building")
+
+    # --- Test 3: SubHouse/House mapping with shift ---
+    def test_3_subhouse_house_with_shift(self):
+        """SubHouse + House + RA1 populated (RA1 NOT a dup of House).
+        Cleaned: Address1=SubHouse, Address2=House, Address3=RA1."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="Foo Road", addr2="",
+                                     postcode="NW10 3JU",
+                                     sub_house="Flat 105",
+                                     house="Queensbrook Building")]
+        _, rows, _ = self._run_council_only(update)
+        self.assertEqual(rows[0]["Address1"], "Flat 105")
+        self.assertEqual(rows[0]["Address2"], "Queensbrook Building")
+        self.assertEqual(rows[0]["Address3"], "Foo Road")
+
+    # --- Test 4: end-to-end Queensbrook regression (sub-width inputs only) ---
+    def test_4_queensbrook_cross_file_padding(self):
+        """Reference has 10 Queensbrook flats at width 4; update has 3 flats
+        ALL at sub-width (105, 905, 92). All three must pad to width 4."""
+        ref = []
+        for nnnn in ["0302", "0306", "0506", "0709", "0911",
+                     "1006", "1303", "1307", "1309", "1606"]:
+            ref.append(_make_app_export_ref_row(
+                f"KG1-{int(nnnn) + 9000}-0",
+                house_name=f"Flat {nnnn} Queensbrook Building",
+                road="Wenlock Road",
+                post_code="NW10 3JU"))
+        update = [
+            _make_council_row("KG1", "100", "New", "Alpha",
+                              addr1="", addr2="", postcode="NW10 3JU",
+                              sub_house="Flat 105", house="Queensbrook Building"),
+            _make_council_row("KG1", "101", "New", "Beta",
+                              addr1="", addr2="", postcode="NW10 3JU",
+                              sub_house="Flat 905", house="Queensbrook Building"),
+            _make_council_row("KG1", "102", "New", "Gamma",
+                              addr1="", addr2="", postcode="NW10 3JU",
+                              sub_house="Flat 92", house="Queensbrook Building"),
+        ]
+        _, rows, _ = self._run_with_app_ref(update, ref)
+        addr1s = sorted(r["Address1"] for r in rows)
+        self.assertEqual(addr1s, ["Flat 0092", "Flat 0105", "Flat 0905"])
+
+    # --- Test 5: no SubHouse/House → unchanged behaviour ---
+    def test_5_no_subhouse_unchanged(self):
+        """Council row without SubHouse/House keeps RA1 → Address1."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="57 Foo Road", addr2="",
+                                     postcode="NW10 3JU")]
+        _, rows, _ = self._run_council_only(update)
+        self.assertEqual(rows[0]["Address1"], "57 Foo Road")
+
+    # --- Test 6: only SubHouse populated ---
+    def test_6_only_subhouse(self):
+        """SubHouse populated, House empty: SubHouse → Address1, RA1 → Address2."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="Foo Building", addr2="",
+                                     postcode="NW10 3JU",
+                                     sub_house="Flat 5")]
+        _, rows, _ = self._run_council_only(update)
+        self.assertEqual(rows[0]["Address1"], "Flat 5")
+        self.assertEqual(rows[0]["Address2"], "Foo Building")
+
+    # --- Test 7: only House populated ---
+    def test_7_only_house(self):
+        """House populated, SubHouse empty: House → Address1, RA1 → Address2."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="Foo Road", addr2="",
+                                     postcode="NW10 3JU", house="57")]
+        _, rows, _ = self._run_council_only(update)
+        self.assertEqual(rows[0]["Address1"], "57")
+        self.assertEqual(rows[0]["Address2"], "Foo Road")
+
+    # --- Test 8: maximally-populated shift (with overflow warning) ---
+    def test_8_maximally_populated_shift(self):
+        """SubHouse + House + RA1-RA6 all populated AND RA1 is NOT a House dup.
+        Address1=SubHouse, Address2=House, Address3-6=RA1-RA4, RA5/RA6 dropped
+        with a warning."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="Foo Lane", addr2="District 5",
+                                     addr3="Sub-Borough", addr4="Borough",
+                                     addr5="Brent", addr6="Greater London",
+                                     postcode="NW10 3JU",
+                                     sub_house="Flat 5", house="Foo Court")]
+        _, rows, report = self._run_council_only(update)
+        self.assertEqual(rows[0]["Address1"], "Flat 5")
+        self.assertEqual(rows[0]["Address2"], "Foo Court")
+        self.assertEqual(rows[0]["Address3"], "Foo Lane")
+        self.assertEqual(rows[0]["Address4"], "District 5")
+        self.assertEqual(rows[0]["Address5"], "Sub-Borough")
+        self.assertEqual(rows[0]["Address6"], "Borough")
+        self.assertIn("Brent", report)
+        self.assertIn("Greater London", report)
+        self.assertIn("dropped", report.lower())
+
+    # --- Test 9: idempotency on same input ---
+    def test_9_idempotency_same_input(self):
+        """Cleaner produces byte-identical output on the same council input
+        run twice."""
+        update = [
+            _make_council_row("KG1", "100", "A", "One",
+                              addr1="", addr2="", postcode="NW10 3JU",
+                              sub_house="Flat 5", house="Foo Court"),
+            _make_council_row("KG1", "101", "B", "Two",
+                              addr1="Foo Lane", addr2="", postcode="NW10 3JU",
+                              sub_house="Flat 6", house="Foo Court"),
+        ]
+        update_path = _write_temp_csv(update, _PAD_COUNCIL_HEADERS)
+        try:
+            outputs = []
+            for _ in range(2):
+                fd, out_path = tempfile.mkstemp(suffix=".csv")
+                os.close(fd)
+                try:
+                    rc, _, stderr = run_clean(update_path, out_path)
+                    self.assertEqual(rc, 0, stderr)
+                    outputs.append(Path(out_path).read_bytes())
+                finally:
+                    if os.path.exists(out_path):
+                        os.unlink(out_path)
+            self.assertEqual(outputs[0], outputs[1])
+        finally:
+            if os.path.exists(update_path):
+                os.unlink(update_path)
+
+    # --- Test 10: alias-collision regression (TTW input → file-swap exit) ---
+    def test_10_ttw_input_rejected_not_aliased(self):
+        """Passing a TTW app-export as the input file triggers the file-swap
+        detector and exits non-zero, rather than silently aliasing 'House Name'
+        to 'House' and running the SubHouse/House shift."""
+        ttw_input_rows = [{
+            "Elector No. Prefix": "KG1", "Elector No.": "100",
+            "Elector No. Suffix": "0", "Full Elector No.": "KG1-100-0",
+            "Surname": "Test", "Forename": "Person",
+            "Address1": "Flat 105", "Address2": "Queensbrook Building",
+            "PostCode": "NW10 3JU", "House Name": "Flat 105 Queensbrook Building",
+        }]
+        ttw_headers = ["Elector No. Prefix", "Elector No.",
+                       "Elector No. Suffix", "Full Elector No.",
+                       "Surname", "Forename", "Address1", "Address2",
+                       "PostCode", "House Name"]
+        bad_input_path = _write_temp_csv(ttw_input_rows, ttw_headers)
+        fd, out_path = tempfile.mkstemp(suffix=".csv")
+        os.close(fd)
+        try:
+            rc, _, stderr = run_clean(bad_input_path, out_path)
+            self.assertNotEqual(rc, 0,
+                "Cleaner should refuse a TTW-format file as input")
+            self.assertIn("TTW format", stderr)
+        finally:
+            for p in [bad_input_path, out_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    # --- Test 11a: ReferenceShape warning fires on non-standard reference ---
+    def test_11a_reference_shape_warning_fires(self):
+        """Reference row with House Name='Queensbrook Building' (building only)
+        + House Number='105' triggers the ReferenceShape warning."""
+        ref = [_make_app_export_ref_row("KG1-100-0",
+            house_name="Queensbrook Building",
+            house_number="105",
+            road="Wenlock Road",
+            post_code="NW10 3JU")]
+        update = [_make_council_row("KG1", "200", "Test", "Person",
+                                     addr1="Some Road", addr2="",
+                                     postcode="NW10 3JU")]
+        _, _, report = self._run_with_app_ref(update, ref)
+        self.assertIn("ReferenceShape", report)
+        self.assertIn("non-standard flat shape", report)
+
+    # --- Test 11b: standard reference shape does NOT warn ---
+    def test_11b_standard_reference_shape_no_warning(self):
+        """Reference row with House Name='Flat 0302 Queensbrook Building',
+        House Number='' (the canonical TTW shape) does NOT emit the warning."""
+        ref = [_make_app_export_ref_row("KG1-100-0",
+            house_name="Flat 0302 Queensbrook Building",
+            house_number="",
+            road="Wenlock Road",
+            post_code="NW10 3JU")]
+        update = [_make_council_row("KG1", "200", "Test", "Person",
+                                     addr1="Some Road", addr2="",
+                                     postcode="NW10 3JU")]
+        _, _, report = self._run_with_app_ref(update, ref)
+        self.assertNotIn("ReferenceShape", report)
+
+    # --- SubHouse/House consumed (not duplicated as raw output columns) ---
+    def test_subhouse_house_not_duplicated_in_output(self):
+        """When SubHouse/House are folded into Address1/Address2, they must
+        NOT also appear as raw passthrough columns in the output CSV — that
+        would duplicate the same data in two places."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="", addr2="", postcode="NW10 3JU",
+                                     sub_house="Flat 105",
+                                     house="Queensbrook Building")]
+        headers, rows, _ = self._run_council_only(update)
+        self.assertNotIn("SubHouse", headers,
+            "SubHouse must not leak into output as a raw passthrough column")
+        self.assertNotIn("House", headers,
+            "House must not leak into output as a raw passthrough column")
+        # And the data did make it into Address1/Address2 (sanity).
+        self.assertEqual(rows[0]["Address1"], "Flat 105")
+        self.assertEqual(rows[0]["Address2"], "Queensbrook Building")
+
+    # --- B2 regression: dup-branch RA6 drop must warn ---
+    def test_b2_dup_branch_ra6_warning(self):
+        """When RA1 is a dup of House and RA6 is populated, the cleaner must
+        warn that RA6 has been dropped (it has no Address7 to land in)."""
+        update = [_make_council_row("KG1", "100", "Test", "Person",
+                                     addr1="Foo Court",  # dup of House
+                                     addr2="Foo Lane",
+                                     addr3="District 5",
+                                     addr4="Borough",
+                                     addr5="Brent",
+                                     addr6="Greater London",  # this should drop+warn
+                                     postcode="NW10 3JU",
+                                     sub_house="Flat 5", house="Foo Court")]
+        _, rows, report = self._run_council_only(update)
+        # Address fan-out: Address1=SubHouse, Address2=House, Address3-6 = RA2..RA5
+        self.assertEqual(rows[0]["Address1"], "Flat 5")
+        self.assertEqual(rows[0]["Address2"], "Foo Court")
+        self.assertEqual(rows[0]["Address3"], "Foo Lane")
+        self.assertEqual(rows[0]["Address4"], "District 5")
+        self.assertEqual(rows[0]["Address5"], "Borough")
+        self.assertEqual(rows[0]["Address6"], "Brent")
+        # RA6 = "Greater London" is the only thing dropped — must be flagged.
+        self.assertIn("Greater London", report)
+        self.assertIn("dropped", report.lower())
 
 
 # ---------------------------------------------------------------------------
