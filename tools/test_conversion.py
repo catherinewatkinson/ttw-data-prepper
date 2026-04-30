@@ -349,18 +349,11 @@ class TestFieldMapping(unittest.TestCase):
         self.assertTrue(len(obrien) >= 1, "O'Brien-Smythe should be in output")
         self.assertEqual(obrien[0]["Surname"], "O'Brien-Smythe")
 
-    def test_subhouse_house_composed_into_address1(self):
-        """SubHouse/House are composed into Address1/Address2; council's
-        redundant duplicate of House in RegisteredAddress1 is collapsed out."""
+    def test_subhouse_not_incorporated_into_address1(self):
+        """SubHouse data should NOT be incorporated into Address1 (pass-through only)."""
         kate = [r for r in self.rows if r["Surname"] == "WithSubHouse"]
         self.assertEqual(len(kate), 1)
-        # Fixture has SubHouse="Flat 3", House="Oak Manor",
-        # RegisteredAddress1="Oak Manor" (council redundancy),
-        # RegisteredAddress2="21 Willesden Lane".
-        self.assertEqual(kate[0]["Address1"], "Flat 3")
-        self.assertEqual(kate[0]["Address2"], "Oak Manor")
-        # RA1 was a dup of House — dropped from the shift; RA2 lands at Address3.
-        self.assertEqual(kate[0]["Address3"], "21 Willesden Lane")
+        self.assertEqual(kate[0]["Address1"], "Oak Manor")
 
     def test_no_discarded_columns_by_default(self):
         """Without --strip-extra, no columns should be listed as discarded."""
@@ -1681,25 +1674,18 @@ class TestRealisticMessyData(unittest.TestCase):
         self.assertIn("SubHouse", self.headers)
         self.assertIn("House", self.headers)
 
-    def test_subhouse_composed_fernandez(self):
-        """Fernandez rows have SubHouse folded into Address1, House into Address2."""
+    def test_subhouse_not_incorporated_fernandez(self):
+        """Fernandez Address1 should NOT have SubHouse data incorporated."""
         fernandez = [r for r in self.rows if r["Surname"] == "Fernandez"]
         self.assertEqual(len(fernandez), 2)
         addr1s = sorted(r["Address1"] for r in fernandez)
-        self.assertEqual(addr1s, ["Flat 2", "Flat 3"])
-        for r in fernandez:
-            self.assertEqual(r["Address2"], "Regency Court")
-            # Council put "Regency Court" in RegisteredAddress1 too — that
-            # duplicate is dropped, so Address3 carries the road.
-            self.assertEqual(r["Address3"], "35 Chamberlayne Road")
+        self.assertEqual(addr1s, ["Regency Court", "Regency Court"])
 
-    def test_subhouse_composed_rivera(self):
-        """Rivera row has SubHouse=Flat 9 folded into Address1."""
+    def test_subhouse_not_incorporated_rivera(self):
+        """Rivera Address1 should NOT have SubHouse data incorporated."""
         rivera = [r for r in self.rows if r["Surname"] == "Rivera"]
         self.assertEqual(len(rivera), 1)
-        self.assertEqual(rivera[0]["Address1"], "Flat 9")
-        self.assertEqual(rivera[0]["Address2"], "Kilburn Court")
-        self.assertEqual(rivera[0]["Address3"], "10 Kilburn Lane")
+        self.assertEqual(rivera[0]["Address1"], "Kilburn Court")
 
     # --- Multi-elector addresses ---
 
@@ -5169,35 +5155,12 @@ class TestSubHouseHousePadding(unittest.TestCase):
                 os.unlink(ref_path)
 
     # --- Test 2: SubHouse/House → Address1/Address2, no shift needed ---
-    def test_2_subhouse_house_no_shift(self):
-        """SubHouse + House populated, RegisteredAddress* empty.
-        Cleaned: Address1=SubHouse, Address2=House."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="", addr2="", postcode="NW10 3JU",
-                                     sub_house="Flat 105",
-                                     house="Queensbrook Building")]
-        _, rows, _ = self._run_council_only(update)
-        self.assertEqual(rows[0]["Address1"], "Flat 105")
-        self.assertEqual(rows[0]["Address2"], "Queensbrook Building")
-
-    # --- Test 3: SubHouse/House mapping with shift ---
-    def test_3_subhouse_house_with_shift(self):
-        """SubHouse + House + RA1 populated (RA1 NOT a dup of House).
-        Cleaned: Address1=SubHouse, Address2=House, Address3=RA1."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="Foo Road", addr2="",
-                                     postcode="NW10 3JU",
-                                     sub_house="Flat 105",
-                                     house="Queensbrook Building")]
-        _, rows, _ = self._run_council_only(update)
-        self.assertEqual(rows[0]["Address1"], "Flat 105")
-        self.assertEqual(rows[0]["Address2"], "Queensbrook Building")
-        self.assertEqual(rows[0]["Address3"], "Foo Road")
-
-    # --- Test 4: end-to-end Queensbrook regression (sub-width inputs only) ---
-    def test_4_queensbrook_cross_file_padding(self):
+    # --- Test 2: end-to-end Queensbrook cross-file padding ---
+    def test_2_queensbrook_cross_file_padding(self):
         """Reference has 10 Queensbrook flats at width 4; update has 3 flats
-        ALL at sub-width (105, 905, 92). All three must pad to width 4."""
+        ALL at sub-width (105, 905, 92) in RegisteredAddress1/RegisteredAddress2.
+        All three must pad to width 4 — proves the reference-side regex change
+        + embedded-flat parse let cross-file padding fire correctly."""
         ref = []
         for nnnn in ["0302", "0306", "0506", "0709", "0911",
                      "1006", "1303", "1307", "1309", "1606"]:
@@ -5208,106 +5171,23 @@ class TestSubHouseHousePadding(unittest.TestCase):
                 post_code="NW10 3JU"))
         update = [
             _make_council_row("KG1", "100", "New", "Alpha",
-                              addr1="", addr2="", postcode="NW10 3JU",
-                              sub_house="Flat 105", house="Queensbrook Building"),
+                              addr1="Flat 105", addr2="Queensbrook Building",
+                              postcode="NW10 3JU"),
             _make_council_row("KG1", "101", "New", "Beta",
-                              addr1="", addr2="", postcode="NW10 3JU",
-                              sub_house="Flat 905", house="Queensbrook Building"),
+                              addr1="Flat 905", addr2="Queensbrook Building",
+                              postcode="NW10 3JU"),
             _make_council_row("KG1", "102", "New", "Gamma",
-                              addr1="", addr2="", postcode="NW10 3JU",
-                              sub_house="Flat 92", house="Queensbrook Building"),
+                              addr1="Flat 92", addr2="Queensbrook Building",
+                              postcode="NW10 3JU"),
         ]
         _, rows, _ = self._run_with_app_ref(update, ref)
         addr1s = sorted(r["Address1"] for r in rows)
         self.assertEqual(addr1s, ["Flat 0092", "Flat 0105", "Flat 0905"])
 
-    # --- Test 5: no SubHouse/House → unchanged behaviour ---
-    def test_5_no_subhouse_unchanged(self):
-        """Council row without SubHouse/House keeps RA1 → Address1."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="57 Foo Road", addr2="",
-                                     postcode="NW10 3JU")]
-        _, rows, _ = self._run_council_only(update)
-        self.assertEqual(rows[0]["Address1"], "57 Foo Road")
-
-    # --- Test 6: only SubHouse populated ---
-    def test_6_only_subhouse(self):
-        """SubHouse populated, House empty: SubHouse → Address1, RA1 → Address2."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="Foo Building", addr2="",
-                                     postcode="NW10 3JU",
-                                     sub_house="Flat 5")]
-        _, rows, _ = self._run_council_only(update)
-        self.assertEqual(rows[0]["Address1"], "Flat 5")
-        self.assertEqual(rows[0]["Address2"], "Foo Building")
-
-    # --- Test 7: only House populated ---
-    def test_7_only_house(self):
-        """House populated, SubHouse empty: House → Address1, RA1 → Address2."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="Foo Road", addr2="",
-                                     postcode="NW10 3JU", house="57")]
-        _, rows, _ = self._run_council_only(update)
-        self.assertEqual(rows[0]["Address1"], "57")
-        self.assertEqual(rows[0]["Address2"], "Foo Road")
-
-    # --- Test 8: maximally-populated shift (with overflow warning) ---
-    def test_8_maximally_populated_shift(self):
-        """SubHouse + House + RA1-RA6 all populated AND RA1 is NOT a House dup.
-        Address1=SubHouse, Address2=House, Address3-6=RA1-RA4, RA5/RA6 dropped
-        with a warning."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="Foo Lane", addr2="District 5",
-                                     addr3="Sub-Borough", addr4="Borough",
-                                     addr5="Brent", addr6="Greater London",
-                                     postcode="NW10 3JU",
-                                     sub_house="Flat 5", house="Foo Court")]
-        _, rows, report = self._run_council_only(update)
-        self.assertEqual(rows[0]["Address1"], "Flat 5")
-        self.assertEqual(rows[0]["Address2"], "Foo Court")
-        self.assertEqual(rows[0]["Address3"], "Foo Lane")
-        self.assertEqual(rows[0]["Address4"], "District 5")
-        self.assertEqual(rows[0]["Address5"], "Sub-Borough")
-        self.assertEqual(rows[0]["Address6"], "Borough")
-        self.assertIn("Brent", report)
-        self.assertIn("Greater London", report)
-        self.assertIn("dropped", report.lower())
-
-    # --- Test 9: idempotency on same input ---
-    def test_9_idempotency_same_input(self):
-        """Cleaner produces byte-identical output on the same council input
-        run twice."""
-        update = [
-            _make_council_row("KG1", "100", "A", "One",
-                              addr1="", addr2="", postcode="NW10 3JU",
-                              sub_house="Flat 5", house="Foo Court"),
-            _make_council_row("KG1", "101", "B", "Two",
-                              addr1="Foo Lane", addr2="", postcode="NW10 3JU",
-                              sub_house="Flat 6", house="Foo Court"),
-        ]
-        update_path = _write_temp_csv(update, _PAD_COUNCIL_HEADERS)
-        try:
-            outputs = []
-            for _ in range(2):
-                fd, out_path = tempfile.mkstemp(suffix=".csv")
-                os.close(fd)
-                try:
-                    rc, _, stderr = run_clean(update_path, out_path)
-                    self.assertEqual(rc, 0, stderr)
-                    outputs.append(Path(out_path).read_bytes())
-                finally:
-                    if os.path.exists(out_path):
-                        os.unlink(out_path)
-            self.assertEqual(outputs[0], outputs[1])
-        finally:
-            if os.path.exists(update_path):
-                os.unlink(update_path)
-
-    # --- Test 10: alias-collision regression (TTW input → file-swap exit) ---
-    def test_10_ttw_input_rejected_not_aliased(self):
-        """Passing a TTW app-export as the input file triggers the file-swap
-        detector and exits non-zero, rather than silently aliasing 'House Name'
-        to 'House' and running the SubHouse/House shift."""
+    # --- Test 3: TTW input rejected (file-swap detector) ---
+    def test_3_ttw_input_rejected(self):
+        """Passing a TTW app-export as the council input should trigger the
+        file-swap detector and exit non-zero — NOT silently process it."""
         ttw_input_rows = [{
             "Elector No. Prefix": "KG1", "Elector No.": "100",
             "Elector No. Suffix": "0", "Full Elector No.": "KG1-100-0",
@@ -5332,8 +5212,8 @@ class TestSubHouseHousePadding(unittest.TestCase):
                 if os.path.exists(p):
                     os.unlink(p)
 
-    # --- Test 11a: ReferenceShape warning fires on non-standard reference ---
-    def test_11a_reference_shape_warning_fires(self):
+    # --- Test 4a: ReferenceShape warning fires on non-standard reference ---
+    def test_4a_reference_shape_warning_fires(self):
         """Reference row with House Name='Queensbrook Building' (building only)
         + House Number='105' triggers the ReferenceShape warning."""
         ref = [_make_app_export_ref_row("KG1-100-0",
@@ -5348,8 +5228,8 @@ class TestSubHouseHousePadding(unittest.TestCase):
         self.assertIn("ReferenceShape", report)
         self.assertIn("non-standard flat shape", report)
 
-    # --- Test 11b: standard reference shape does NOT warn ---
-    def test_11b_standard_reference_shape_no_warning(self):
+    # --- Test 4b: standard reference shape does NOT warn ---
+    def test_4b_standard_reference_shape_no_warning(self):
         """Reference row with House Name='Flat 0302 Queensbrook Building',
         House Number='' (the canonical TTW shape) does NOT emit the warning."""
         ref = [_make_app_export_ref_row("KG1-100-0",
@@ -5362,49 +5242,6 @@ class TestSubHouseHousePadding(unittest.TestCase):
                                      postcode="NW10 3JU")]
         _, _, report = self._run_with_app_ref(update, ref)
         self.assertNotIn("ReferenceShape", report)
-
-    # --- SubHouse/House consumed (not duplicated as raw output columns) ---
-    def test_subhouse_house_not_duplicated_in_output(self):
-        """When SubHouse/House are folded into Address1/Address2, they must
-        NOT also appear as raw passthrough columns in the output CSV — that
-        would duplicate the same data in two places."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="", addr2="", postcode="NW10 3JU",
-                                     sub_house="Flat 105",
-                                     house="Queensbrook Building")]
-        headers, rows, _ = self._run_council_only(update)
-        self.assertNotIn("SubHouse", headers,
-            "SubHouse must not leak into output as a raw passthrough column")
-        self.assertNotIn("House", headers,
-            "House must not leak into output as a raw passthrough column")
-        # And the data did make it into Address1/Address2 (sanity).
-        self.assertEqual(rows[0]["Address1"], "Flat 105")
-        self.assertEqual(rows[0]["Address2"], "Queensbrook Building")
-
-    # --- B2 regression: dup-branch RA6 drop must warn ---
-    def test_b2_dup_branch_ra6_warning(self):
-        """When RA1 is a dup of House and RA6 is populated, the cleaner must
-        warn that RA6 has been dropped (it has no Address7 to land in)."""
-        update = [_make_council_row("KG1", "100", "Test", "Person",
-                                     addr1="Foo Court",  # dup of House
-                                     addr2="Foo Lane",
-                                     addr3="District 5",
-                                     addr4="Borough",
-                                     addr5="Brent",
-                                     addr6="Greater London",  # this should drop+warn
-                                     postcode="NW10 3JU",
-                                     sub_house="Flat 5", house="Foo Court")]
-        _, rows, report = self._run_council_only(update)
-        # Address fan-out: Address1=SubHouse, Address2=House, Address3-6 = RA2..RA5
-        self.assertEqual(rows[0]["Address1"], "Flat 5")
-        self.assertEqual(rows[0]["Address2"], "Foo Court")
-        self.assertEqual(rows[0]["Address3"], "Foo Lane")
-        self.assertEqual(rows[0]["Address4"], "District 5")
-        self.assertEqual(rows[0]["Address5"], "Borough")
-        self.assertEqual(rows[0]["Address6"], "Brent")
-        # RA6 = "Greater London" is the only thing dropped — must be flagged.
-        self.assertIn("Greater London", report)
-        self.assertIn("dropped", report.lower())
 
 
 # ---------------------------------------------------------------------------

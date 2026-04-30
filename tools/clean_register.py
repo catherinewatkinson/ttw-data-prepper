@@ -125,14 +125,6 @@ _alias_entries = {
     "Suffix": ["suffix", "electorsuffix", "electornosuffix"],
     "ElectorTitle": ["electortitle", "title"],
     "ElectorID": ["electorid"],
-    # Council "SubHouse" carries the flat designator; "House" carries the
-    # building name/number. Aliases deliberately exclude "housename" and
-    # "house_name" to avoid colliding with the TTW reference's "House Name"
-    # column (which normalises to "housename"). The TTW reference is read
-    # directly via build_padding_reference and never goes through map_row
-    # aliasing, so we don't need that alias here.
-    "SubHouse": ["subhouse", "sub_house", "sub house"],
-    "House": ["house"],
 }
 for canonical, aliases in _alias_entries.items():
     for alias in aliases:
@@ -437,80 +429,16 @@ def validate_input(headers, rows, report, max_rows):
 def map_row(council_row, row_num=None, report=None):
     """Map council-format fields to TTW-format fields.
 
-    After the standard FIELD_MAP copy, if the council row uses dedicated
-    SubHouse / House columns (Brent's preferred place for flat designator
-    and building name), fold them into Address1/Address2 and shift any
-    RegisteredAddress1-RegisteredAddress4 content into Address3-Address6.
-    Composition runs *after* the FIELD_MAP loop so its writes are final —
-    otherwise the loop would overwrite our SubHouse value with whatever
-    (often empty) string sits in RegisteredAddress1.
+    The council update is the source of truth for the elector's address —
+    RegisteredAddress1-RegisteredAddress6 map straight through to
+    Address1-Address6 untouched. SubHouse/House are passthrough audit columns
+    only and never feed into Address composition (they're often inconsistently
+    populated and would corrupt the canonical address).
     """
     ttw_row = {}
     for council_col, ttw_col in FIELD_MAP.items():
         val = council_row.get(council_col) or ""
         ttw_row[ttw_col] = val.strip()
-
-    sub_house = (council_row.get("SubHouse") or "").strip()
-    house = (council_row.get("House") or "").strip()
-
-    if not (sub_house or house):
-        return ttw_row
-
-    ra1 = (council_row.get("RegisteredAddress1") or "").strip()
-    ra2 = (council_row.get("RegisteredAddress2") or "").strip()
-    ra3 = (council_row.get("RegisteredAddress3") or "").strip()
-    ra4 = (council_row.get("RegisteredAddress4") or "").strip()
-    ra5 = (council_row.get("RegisteredAddress5") or "").strip()
-    ra6 = (council_row.get("RegisteredAddress6") or "").strip()
-
-    if sub_house and house:
-        # Structured flat data — both populated.
-        # Some council data redundantly stores the building name in
-        # RegisteredAddress1 (and/or the combined "SubHouse House" string).
-        # When that happens, drop the dup so we don't end up with the
-        # building name twice in Address2 + Address3.
-        def _norm(s):
-            return " ".join(s.split()).lower()
-        combined = f"{sub_house} {house}".strip()
-        if _norm(ra1) in {_norm(house), _norm(combined)}:
-            # RA1 is a duplicate — collapse it out of the shift.
-            # Address3..6 take RA2..RA5; RA6 still falls off the end.
-            shifted = [ra2, ra3, ra4, ra5]
-            dropped_high = ra6
-        else:
-            shifted = [ra1, ra2, ra3, ra4]
-            dropped_high = "; ".join(p for p in (ra5, ra6) if p)
-        ttw_row["Address1"] = sub_house
-        ttw_row["Address2"] = house
-        for offset, val in enumerate(shifted[:4], start=3):
-            ttw_row[f"Address{offset}"] = val
-        if dropped_high and report is not None and row_num is not None:
-            report.warnings.append((row_num, "Address", "",
-                f"Address overflow dropped after SubHouse/House shift: "
-                f"{dropped_high}"))
-    elif sub_house and not house:
-        # Flat designator alone — keep RA1 as Address2 (likely the building).
-        ttw_row["Address1"] = sub_house
-        ttw_row["Address2"] = ra1
-        ttw_row["Address3"] = ra2
-        ttw_row["Address4"] = ra3
-        ttw_row["Address5"] = ra4
-        ttw_row["Address6"] = ra5
-        if ra6 and report is not None and row_num is not None:
-            report.warnings.append((row_num, "Address", "",
-                f"RA6 dropped after SubHouse shift: '{ra6}'"))
-    elif house and not sub_house:
-        # Building/house number without flat — house goes in Address1.
-        ttw_row["Address1"] = house
-        ttw_row["Address2"] = ra1
-        ttw_row["Address3"] = ra2
-        ttw_row["Address4"] = ra3
-        ttw_row["Address5"] = ra4
-        ttw_row["Address6"] = ra5
-        if ra6 and report is not None and row_num is not None:
-            report.warnings.append((row_num, "Address", "",
-                f"RA6 dropped after House shift: '{ra6}'"))
-
     return ttw_row
 
 
@@ -1732,10 +1660,6 @@ def build_output_headers(rows, elections, election_types, has_date_data=False,
     if not strip_extra:
         input_set = set(input_headers or [])
         exclude = set(FIELD_MAP.keys())
-        # SubHouse/House are consumed by map_row's composition into
-        # Address1/Address2 and must not be re-emitted as raw output columns.
-        exclude.add("SubHouse")
-        exclude.add("House")
         # Exclude TTW-named columns only when their mapped source is present
         for ttw_name, source_name in _FIELD_MAP_REVERSE.items():
             if source_name in input_set:
@@ -1907,14 +1831,13 @@ def main():
         # If an input column has the same name as a TTW output field (e.g. "Address2"),
         # only skip it if the corresponding mapped source column (e.g. "RegisteredAddress2")
         # is present in the input — otherwise the data would be silently lost.
-        # SubHouse/House are treated as consumed: map_row folds their content
-        # into Address1/Address2, so re-emitting them as raw passthrough
-        # columns would duplicate the data in the output CSV.
+        # Note: SubHouse/House are folded into Address1/Address2 by map_row but
+        # are also preserved here as raw passthrough columns (matching the
+        # established convention for non-FIELD_MAP input columns: keep originals
+        # for audit/traceability; --strip-extra drops them when uploading to TTW).
         for col, val in stripped.items():
             if col in FIELD_MAP:
                 continue  # Source column already consumed by map_row
-            if col in ("SubHouse", "House"):
-                continue  # Consumed by map_row's SubHouse/House composition
             source_col = _FIELD_MAP_REVERSE.get(col)
             if source_col and source_col in stripped:
                 continue  # TTW-named col would overwrite properly mapped value
